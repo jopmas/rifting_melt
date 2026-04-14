@@ -16,6 +16,9 @@ color_ast = (207./cr,226./cr,205./cr) # 0
 
 colors = [color_ast,color_lit,color_lc,color_uc,color_bas,color_air]
 
+#Creating a custom colormap according to the list of colors defined above.
+# This colormap will be used to plot the lithology mesh, where each lithology type is represented by a specific color.
+
 cmap = ListedColormap(colors)
 
 def replace_negatives_with_neighbors(mat):
@@ -59,11 +62,9 @@ with open("param.txt","r") as f:
 
 print(Nx,Nz,Lx,Lz) #Lz/(Nz-1)
 
-
+#The lithology mesh will be 5 times finer than the original grid, to better capture the lithological variations.
 Nxl = (Nx-1)*5
 Nzl = (Nz-1)*5
-
-
 
 #xx,zz = np.mgrid[0:Lx:(Nx)*1j,-Lz:0:(Nz)*1j]
 
@@ -72,30 +73,30 @@ zi = np.linspace(-Lz/1000,0,Nz)
 xx,zz = np.meshgrid(xi,zi)
 
 
-ts = glob.glob("Tempo_*.txt")
+ts = glob.glob("time/time_*.txt")
 total_curves = len(ts) #total_steps/print_step
 n_curves = total_curves/2
 
 val = 100
 
-
-
-
-
-for cont in range(step_initial,step_final,d_step):#
+for cont in range(step_initial, step_final, d_step):#
 	print(cont)
 
+	#Creating a mesh for the lithology, where each point will be assigned a lithology type based on the core data.
 	litho_mesh = np.zeros((Nxl,Nzl))-1
 
-	A = np.loadtxt("time_"+str(cont)+".txt",dtype='str')  
+	#Reading the time data to get the current time_step
+	A = np.loadtxt("time/time_"+str(cont)+".txt",dtype='str')  
 	AA = A[:,2:]
 	AAA = AA.astype("float") 
 	tempo = np.copy(AAA)
 	
 	print("Time = %.1lf Myr\n\n"%(tempo[0]/1.0E6))
 
-	
-	A = pd.read_csv("density_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
+	#Reading the density for the current time_step.
+	# The data is reshaped to match the original grid dimensions (Nx, Nz).
+     
+	A = pd.read_csv("density/density_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
 	A = A.to_numpy()
 	TT = A*1.0
 	TT[np.abs(TT)<1.0E-200]=0
@@ -104,8 +105,8 @@ for cont in range(step_initial,step_final,d_step):#
 	TTT = np.transpose(TTT)
 	rho = np.copy(TTT)
     
-
-	A = pd.read_csv("temperature_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
+	#Reading temperature for the current time_step
+	A = pd.read_csv("temperature/temperature_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
 	A = A.to_numpy()
 	TT = A*1.0
 	TT[np.abs(TT)<1.0E-200]=0
@@ -113,8 +114,8 @@ for cont in range(step_initial,step_final,d_step):#
 	TTT = np.transpose(TT)
 	temper = np.copy(TTT)
 
-
-	A = pd.read_csv("strain_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
+	#Reading the strain for the current time_step
+	A = pd.read_csv("strain/strain_"+str(cont)+".txt",delimiter = " ",comment="P",skiprows=2,header=None) 
 	A = A.to_numpy()
 	TT = A*1.0
 	TT[np.abs(TT)<1.0E-200]=0
@@ -126,27 +127,29 @@ for cont in range(step_initial,step_final,d_step):#
 	TTT = np.log10(TTT)
 	stc = np.copy(TTT)
 	
+	#Reading the lithology data for the current time_step.
+	# The lithology data is read from multiple core files, and each core file contains the lithology information
+	# for a specific region of the grid.
+	# The lithology data is then combined to create a complete lithology mesh for the entire grid.
 	x = []
 	z = []
 	litho = []
 	for core in range(ncores):
-		A = pd.read_csv("litho_%d_%d.txt"%(cont,core),delimiter = " ",comment="P",skiprows=0,header=None) 
+		A = pd.read_csv("lithos/litho_%d_%d.txt"%(cont,core),delimiter = " ",comment="P",skiprows=0,header=None) 
 		A = A.to_numpy()
 		print(np.shape(A))
-		x = np.append(x,A[:,0])
-		z = np.append(z,A[:,1])
+		x = np.append(x, A[:,0]) #first column
+		z = np.append(z, A[:,1]) #last column
 		litho = np.append(litho,A[:,2])
 
 	z = z.astype(int)
 	x = x.astype(int)
-
     
 	litho_mesh[x,z] = litho
 
 	litho_mesh = replace_negatives_with_neighbors(litho_mesh)
-     
 	
-	
+	#The lithology types are reclassified to fit into the defined color scheme for plotting.
 	litho_mesh[litho_mesh==2]=1 #Lithospheric mantle
 	litho_mesh[litho_mesh==3]=1 #Lithospheric mantle
 	litho_mesh[litho_mesh==4]=2 #Lower crust
@@ -154,17 +157,17 @@ for cont in range(step_initial,step_final,d_step):#
 	litho_mesh[litho_mesh==6]=4 #Bas
 	litho_mesh[litho_mesh==7]=5 #Air
 	
-	print("basalto",np.sum(litho_mesh==4))
+	print("basalto", np.sum(litho_mesh==4))
 
+	#Creating frame plot for the current time_step,
+	#where the lithology mesh is plotted with the defined color scheme, and the temperature contours are overlaid in red.
+	#The strain data is also plotted as a semi-transparent overlay to visualize the strain distribution across the grid.
 	plt.close()
 	plt.figure(figsize=(10*2,2.5*2))
 
-	
-
-	
 	plt.imshow(np.transpose(litho_mesh),extent=[0,Lx/1000,-Lz/1000,0],cmap=cmap,vmin=0,vmax=5,interpolation="none")
 	
-	#para plotar as isotermas em vermelho
+	#Plotting isotherms in red
 	plt.contour(xx,zz,temper,levels=[550,750,850,950,1200,1300],
 		colors=[(1,0,0),(1,0,0),(1,0,0)],linewidths=1.0)
 
@@ -177,8 +180,6 @@ for cont in range(step_initial,step_final,d_step):#
 
 	plt.text(100,10,"%.1lf Myr"%(tempo[0]/1.0E6))
 
-	
-
-	plt.savefig("LithoStrain_{:05}.png".format(cont*1), dpi=300)
+	plt.savefig("out/LithoStrain_{:05}.png".format(cont*1), dpi=300)
 
 	
