@@ -71,7 +71,28 @@ function read_time(step::Int)::Float32
 end
 
 function convert_to_nc(variable::String,pdict::Dict{String,Any})
-    nc_fname = "$variable.nc"
+    # '''
+    # Converte os arquivos de texto para NetCDF usando NCDatasets.jl.
+    # A função é projetada para ser eficiente, utilizando multithreading para processar os passos de tempo em paralelo.
+    # Os dados são armazenados em buffers na memória e escritos no arquivo NetCDF ao final do processamento.
+    # O nível de compressão pode ser ajustado para otimizar o tamanho do arquivo resultante.
+
+    # parameters:
+    # -----------
+    # - variable: nome da variável a ser convertida (e.g., "velocity", "surface", "density", etc.)
+    # - pdict: dicionário contendo os parâmetros necessários para a conversão, incluindo dimensões, coordenadas, passos de tempo, unidades e outros parâmetros relevantes
+    # '''
+
+    if variable == "dPhi"
+        nc_fname = "_incremental_melt.nc"
+    elseif variable == "Phi"
+        nc_fname = "_melt.nc"
+    elseif variable == "X_depletion"
+        nc_fname = "_depletion_factor.nc"
+    else
+        nc_fname = "_$variable.nc"
+    end 
+    
     Nx = pdict["Nx"]
     Nz = pdict["Nz"]
     Lx = pdict["Lx"]
@@ -83,6 +104,7 @@ function convert_to_nc(variable::String,pdict::Dict{String,Any})
     units = pdict["units"]
     h_air = pdict["air"]
     times = pdict["times"]
+    steps = pdict["steps"]
     dfllevel::Int8 = 7 #compression level 1-9
 
 
@@ -109,19 +131,19 @@ function convert_to_nc(variable::String,pdict::Dict{String,Any})
     start_time = time()
     
     @threads for i in eachindex(steps)
-            step = steps[i]
+        step = steps[i]
 
-            data = read_data(variable,step,(Nx,Nz),veloc=veloc, surface=surface)
-            if data !== nothing
-            
-	    if veloc
-                dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
-                vx,vy = data
-                vx[dens.<1200] .= 0
-                vy[dens.<1200] .= 0
-		        buffer_vx[:, :, i] = vx'
-                buffer_vy[:, :, i] = vy'
-                
+        data = read_data(variable,step,(Nx,Nz),veloc=veloc, surface=surface)
+        if data !== nothing
+
+            if veloc
+                    dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
+                    vx,vy = data
+                    vx[dens.<1200] .= 0
+                    vy[dens.<1200] .= 0
+                    buffer_vx[:, :, i] = vx'
+                    buffer_vy[:, :, i] = vy'
+                    
             elseif surface
 
                 sx,sy = data
@@ -130,24 +152,29 @@ function convert_to_nc(variable::String,pdict::Dict{String,Any})
                 sy .= sy .- fix_topo
 
                 buffer_surf[:, i] = sy
+            # elseif strain
+            #     data[data .< 1.0e-200] .= 0
+            #     dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
+            #     data[dens.<200] .= 0
+            #     data = log10.(data)
             else
                 dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
                 data[dens.<1200] .= 0
                 buffer_var[:, :, i] = data'
             end
 	    
-            else
-                @warn "No data found for $fpath at step $step"
-            end
+        else
+            @warn "No data found for $fpath at step $step"
+        end
         
         #Tracker
-			Threads.atomic_add!(progress_counter, 1)
-			if progress_counter[] % 10 == 0
-				speed = (time() - start_time) / progress_counter[]
-				@info "[$variable] Progress: $(progress_counter[])/$num_steps | Speed: $(round(speed, digits=2))s/step"
-			end
-        
+        Threads.atomic_add!(progress_counter, 1)
+        if progress_counter[] % 10 == 0
+            speed = (time() - start_time) / progress_counter[]
+            @info "[$variable] Progress: $(progress_counter[])/$num_steps | Speed: $(round(speed, digits=2))s/step"
         end
+        
+    end
     
     Dataset(nc_fname,"c") do ds #criar o arquivo nc
 
@@ -155,6 +182,12 @@ function convert_to_nc(variable::String,pdict::Dict{String,Any})
         defVar(ds,"time",Float32.(times),("time",),
         attrib=Dict("units"=>units["time"],"long_name"=>"Time","axis"=>"T"),
                                                                 deflatelevel=dfllevel, shuffle=true)
+
+        defVar(ds, "steps", steps, ("time",),
+        attrib=Dict("long_name"=>"Steps"),
+                                        deflatelevel=dfllevel, shuffle=true)
+
+        #ds["steps"][:] = steps
         
         if veloc
             defDim(ds,"x",Nx)
@@ -182,16 +215,32 @@ function convert_to_nc(variable::String,pdict::Dict{String,Any})
             ds[variable][:, :] = buffer_surf
             
         else
-            defDim(ds,"x",Nx)
-            defDim(ds,"z",Nz)
+            if variable == "dPhi"
+                longname = "incremental_melt"
+            elseif variable == "Phi"
+                longname = "melt"
+            elseif variable == "X_depletion"
+                longname = "depletion_factor"
+            else
+                longname = variable
+            end
+
+            defDim(ds,"x", Nx)
+            defDim(ds,"z", Nz)
             defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>"m","long_name"=>"x-coordinate","axis" => "X"), 
             													deflatelevel=dfllevel,shuffle=true)
             defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>"m","long_name"=>"z-coordinate","axis"=>"Z"),
                                                                 deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,variable,Float32,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
+            defVar(ds,variable,Float32,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>longname),
                                                                 deflatelevel=dfllevel, shuffle=true)
-                                                                
+            
+                                                       
             ds[variable][:, :, :] = buffer_var
+            ds.attrib["nx"] = Nx
+            ds.attrib["nz"] = Nz
+            ds.attrib["lx"] = Lx
+            ds.attrib["lz"] = Lz
+
         end
 	
         
@@ -206,7 +255,9 @@ data_dir = ARGS[end]
 cd(data_dir)
 
 # 1. Variáveis para passar pra binario
-vars = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
+# vars = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
+
+vars = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","heat"]
 # vars = ["heat"]
 #vars = []
 # "depletion_factor":"X_depletion",
@@ -268,7 +319,7 @@ vars = unique(vars)
 # 5. NetCDF para cada variável
 for var in vars
     println("Convertendo variável: $var")
-    convert_to_nc(var,pdict)
+    convert_to_nc(var, pdict)
 end
 
 println("\nConversão concluída!")

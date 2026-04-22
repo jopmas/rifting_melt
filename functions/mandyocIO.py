@@ -443,7 +443,9 @@ def read_mandyoc_output(model_path, parameters_file=PARAMETERS_FNAME, datasets=t
 def read_datasets(model_path, datasets, save_big_dataset=False):
     empty_dataset = True
     for item in datasets:
-        dataset_aux = xr.open_dataset(f"{model_path}/_output_{item}.nc")
+        # dataset_aux = xr.open_dataset(f"{model_path}/_output_{item}.nc")
+        print(f"{model_path}/_{item}.nc")
+        dataset_aux = xr.open_dataset(f"{model_path}/_{item}.nc")
         if (empty_dataset == True):
             dataset = dataset_aux
             empty_dataset = False

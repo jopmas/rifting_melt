@@ -79,7 +79,7 @@ end
 
 #plotando de cabeça pra baixo
 function convert_litho_to_nc(pdict::Dict{String,Any})
-    nc_fname = "lithology.nc"
+    nc_fname = "_lithology.nc"
     Nx = pdict["Nx"]
     Nz = pdict["Nz"]
     Lx = pdict["Lx"]
