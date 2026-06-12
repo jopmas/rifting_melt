@@ -46,8 +46,8 @@ if not os.path.isdir(output_path):
 
 plot_isotherms = True
 # plot_isotherms = False
-plot_melt = True
-# plot_melt = False
+# plot_melt = True
+plot_melt = False
 plot_particles=False
 
 if(plot_isotherms or plot_melt):
@@ -238,15 +238,20 @@ color_lit = (155./cr,194./cr,155./cr) # 1
 color_ast = (207./cr,226./cr,205./cr) # 0
 
 
-colors = [color_ast,color_lit,color_lc,color_uc,color_bas,color_air]
+colors = [color_ast,
+          color_lit,
+          color_lc,
+          color_uc,
+        #   color_bas,
+          color_air]
 
 #Creating a custom colormap according to the list of colors defined above.
 # This colormap will be used to plot the lithology mesh, where each lithology type is represented by a specific color.
 
 cmap = ListedColormap(colors)
-
+ylims = [200, 0]
 with pymp.Parallel() as p:
-    for i in p.range(start, end+step, step):
+    for i in p.range(start, end, step):
         # instant = np.round(dataset.time.values[i], 2)
         instant = dataset.time.isel(time=i).values
         # data = dataset.isel(time=i)
@@ -263,23 +268,24 @@ with pymp.Parallel() as p:
             data = lithology_dataset['lithology'].isel(time=i).to_numpy()[::-1,:]
             axs.imshow(data, extent=[0, Lx/1000, Lz/1000, 0], cmap=cmap, vmin=0, vmax=5, alpha=1.0)
             axs.imshow(np.log10(dataset.strain.isel(time=i)[::-1,:]), extent=[0,Lx/1000,Lz/1000,0], cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
-            axs.contour(dataset.temperature.isel(time=i)[::-1,:], levels=[500, 600, 700,800, 900, 1300], colors='r', linewidths=1.0)
+            axs.contour(xx, zz, dataset.temperature.isel(time=i), levels=[500, 600, 700,800, 900, 1300], colors='r', linewidths=1.0)
             
+            if(plot_melt): 
+                melt = dataset.Phi.isel(time=i).to_numpy()[::,:]
+                incremental_melt = dataset.dPhi.isel(time=i).to_numpy()[::,:]
+                meltmin, meltmax = melt.min(), melt.max()
+                dmeltmin, dmeltmax = incremental_melt.min(), incremental_melt.max()
 
-            melt = dataset.Phi.isel(time=i).to_numpy()[::,:]
-            incremental_melt = dataset.dPhi.isel(time=i).to_numpy()[::,:]
-            meltmin, meltmax = melt.min(), melt.max()
-            dmeltmin, dmeltmax = incremental_melt.min(), incremental_melt.max()
+                incremental_melt[incremental_melt == 0] = np.nan # Set zero values to NaN to avoid plotting them
+                melt[melt == 0] = np.nan # Set zero values to NaN to avoid plotting them
 
-            incremental_melt[incremental_melt == 0] = np.nan # Set zero values to NaN to avoid plotting them
-            melt[melt == 0] = np.nan # Set zero values to NaN to avoid plotting them
+                axs.contourf(xx, zz, incremental_melt, levels=0, colors=color_incremental_melt, alpha=0.4, zorder=30)
+                axs.contour(xx, zz, incremental_melt, levels=1, colors=color_incremental_melt, linewidths=1.5, alpha=1.0, zorder=30)
 
-            axs.contourf(xx, zz, incremental_melt, levels=0, colors=color_incremental_melt, alpha=0.4, zorder=30)
-            axs.contour(xx, zz, incremental_melt, levels=1, colors=color_incremental_melt, linewidths=1.5, alpha=1.0, zorder=30)
-
-            axs.contourf(xx, zz, melt, levels=0, colors=color_depleted_mantle, alpha=0.4, zorder=20)
-            axs.contour(xx, zz, melt, levels=2, colors='xkcd:blue', linewidths=0.8, alpha=0.8, zorder=20)
-
+                axs.contourf(xx, zz, melt, levels=0, colors=color_depleted_mantle, alpha=0.4, zorder=20)
+                axs.contour(xx, zz, melt, levels=2, colors='xkcd:blue', linewidths=0.8, alpha=0.8, zorder=20)
+            
+            axs.set_ylim(ylims)
             bbox_to_anchor=(0.93,#horizontal position respective to parent_bbox or "loc" position
                 0.25,# vertical position
                 0.065,# width
@@ -342,8 +348,8 @@ with pymp.Parallel() as p:
             if(plot_melt):
                 #plotting melt legend
                 text_fsize = 12
-                axs.text(0.01, 0.90, r'Melt Fraction $\left(\frac{\partial \phi}{\partial t}\right)$', color='xkcd:bright pink', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
-                axs.text(0.15, 0.90, r'Depleted Mantle ($\phi$)', color='xkcd:bright purple', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
+                axs.text(0.01, 1.05, r'Melt Fraction $\left(\frac{\partial \phi}{\partial t}\right)$', color='xkcd:bright pink', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
+                axs.text(0.18, 1.05, r'Depleted Mantle ($\phi$)', color='xkcd:bright purple', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
 
                 figname = f"{model_name}_{prop}_and_PTt_temperature_coded_MeltFrac_{str(int(steps[i])).zfill(6)}.png"
             else:

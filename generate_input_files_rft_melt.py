@@ -160,7 +160,7 @@ if(crameri_colors):
 scenario_kind = 'double_keel'
 
 experiemnts = {
-               'double_keel': 'Double Cratonic Keel',
+               'double_keel': 'Rifting',
                }
 
 # ncores = 20
@@ -296,7 +296,7 @@ C_ast = 1.0
 
 #density (kg/m3)
 rho_air = 1.0
-rho_basalt = 2900.0
+rho_basalt = 2900.0 
 if(sediments==True):
     rho_sed = 2700.0
     rho_dec = 2350.0
