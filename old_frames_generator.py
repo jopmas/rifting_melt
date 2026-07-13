@@ -5,7 +5,6 @@ import os
 import gc
 import sys
 import multiprocessing #needed to run pymp in mac
-from multiprocessing import Pool
 import psutil
 multiprocessing.set_start_method('fork') #needed to run pymp in mac 
 # multiprocessing.set_start_method('spawn')
@@ -91,114 +90,171 @@ properties = [#Properties from mandyoc. Comment/uncomment to select which ones y
 #######################################################
 # Read ascii outputs and save them as xarray.Datasets #
 #######################################################
-strain_ds = None
-temperature_ds = None
-lithology_ds = None
-melt_ds = None
-dphi_ds = None
 
-def init_worker(model_path, plot_melt):
+new_datasets = change_dataset(properties, datasets)
+# print(new_datasets)
+to_remove = []
+remove_density=False
+if ('density' not in properties): #used to plot air/curst interface
+        properties.append('density')
+        new_datasets = change_dataset(properties, datasets)
+        to_remove.append('density')
+        # remove_density=True
 
-    global strain_ds, temperature_ds, lithology_ds
-    global melt_ds, dphi_ds
+# if ('surface' not in properties): #used to plot air/curst interface
+#         properties.append('surface')
+#         new_datasets = change_dataset(properties, datasets)
+#         to_remove.append('surface')
+        # remove_density=True
 
-    strain_ds = xr.open_dataset(
-        f"{model_path}/_strain.nc",
-        cache=False
-    )
+if (plot_isotherms): #add datasets needed to plot isotherms
+    if ('temperature' not in new_datasets):
+        properties.append('temperature')
+        new_datasets = change_dataset(properties, datasets)
+        to_remove.append('temperature')
 
-    temperature_ds = xr.open_dataset(
-        f"{model_path}/_temperature.nc",
-        cache=False
-    )
+# print(f"newdatasets: {new_datasets}")
 
-    lithology_ds = xr.open_dataset(
-        f"{model_path}/_lithology.nc",
-        cache=False
-    )
-    if plot_melt:
-            melt_ds = xr.open_dataset(
-                f"{model_path}/_melt.nc",
-                cache=False
-            )
+if (plot_melt): #add datasets needed to plot melt fraction
+    if ('melt' not in properties):
+        properties.append('melt')
+    if ('incremental_melt' not in properties):
+        properties.append('incremental_melt')
+    new_datasets = change_dataset(properties, datasets)
 
-            dphi_ds = xr.open_dataset(
-                f"{model_path}/_incremental_melt.nc",
-                cache=False
-            )
+    #removing the auxiliary datasets to not plot
+    to_remove.append('melt')
+    to_remove.append('incremental_melt')
 
-# def plot_frame(i):
+if(clean_plot): #a clean plot
+    new_datasets = change_dataset(properties, datasets)
 
-def plot_chunks(indexs):
-
-    global strain_ds
-    global temperature_ds
-    global lithology_ds
-    global melt_ds
-    global dphi_ds
-
-    np.seterr(divide='ignore')
+for item in to_remove:
+    properties.remove(item)
     
-    Nx = int(strain_ds.nx) #int(strain_dataset.nx)
-    Nz = int(strain_ds.nz) #int(strain_dataset.nz)
-    Lx = float(strain_ds.lx) #float(strain_dataset.lx)
-    Lz = float(strain_ds.lz) #float(strain_dataset.lz)
+# dataset = read_datasets(model_path, new_datasets)
+# print(dataset.keys())
+# Normalize velocity values
+# if ("velocity_x" and "velocity_z") in dataset.data_vars:
+#     v_max = np.max((dataset.velocity_x**2 + dataset.velocity_z**2)**(0.5))    
+#     dataset.velocity_x[:] = dataset.velocity_x[:] / v_max
+#     dataset.velocity_z[:] = dataset.velocity_z[:] / v_max
 
-    x = np.linspace(0, Lx/1000.0, Nx)
-    z = np.linspace(-Lz/1000.0, 0, Nz)
-    xx, zz  = np.meshgrid(x, z)
+# if ('lithology' in properties):
+# lithology_dataset = xr.open_dataset(f"{model_path}/_lithology.nc")
+# strain_dataset = xr.open_dataset(f"{model_path}/_strain.nc")
+# temperature_dataset = xr.open_dataset(f"{model_path}/_temperature.nc")
 
-    steps = np.array(strain_ds.steps.values)
-    times = np.array(strain_ds.time.values)
+# if(plot_melt):
+#     Phi_dataset = xr.open_dataset(f"{model_path}/_melt.nc")
+#     dPhi_dataset = xr.open_dataset(f"{model_path}/_incremental_melt.nc")
 
-    linewidth = 0.1
-    markersize = 4
-    line_alpha = 1.0
+#########################################
+# Get domain and particles informations #
+#########################################
 
-    cr = 255.
-    color_air = (1.,1.,1.) # 5
-    color_bas = (250./cr,50./cr,50./cr) # 4
-    color_uc = (228./cr,156./cr,124./cr) # 3
-    color_lc = (240./cr,209./cr,188./cr) # 2
-    color_lit = (155./cr,194./cr,155./cr) # 1
-    color_ast = (207./cr,226./cr,205./cr) # 0
+Nx = int(xr.open_dataset(f"{model_path}/_strain.nc").nx) #int(strain_dataset.nx)
+Nz = int(xr.open_dataset(f"{model_path}/_strain.nc").nz) #int(strain_dataset.nz)
+Lx = float(xr.open_dataset(f"{model_path}/_strain.nc").lx) #float(strain_dataset.lx)
+Lz = float(xr.open_dataset(f"{model_path}/_strain.nc").lz) #float(strain_dataset.lz)
+
+x = np.linspace(0, Lx/1000.0, Nx)
+z = np.linspace(-Lz/1000.0, 0, Nz)
+xx, zz  = np.meshgrid(x, z)
+
+# print(particles_layers)
+############################################################################################################################
+# Plotting
+plot_colorbar = True
+h_air = 40.0
+
+start = 0
+end = int(xr.open_dataset(f"{model_path}/_strain.nc").time.size)
+step = 1
+
+make_videos = True
+# make_videos = False
+
+make_gifs = True
+# make_gifs = False
+
+zip_files = True
+# zip_files = False
+
+print("Generating frames...")
+
+color_lower_crust='xkcd:brown'
+
+color_incremental_melt = 'xkcd:bright pink'
+color_depleted_mantle='xkcd:bright purple'
+# topo_from_density = False
+topo_from_density = True
+
+linewidth = 0.1
+markersize = 4
+line_alpha = 1.0
+# color_crust='xkcd:grey'
+
+# color_incremental_melt = 'xkcd:bright pink'
+# color_depleted_mantle='xkcd:dark grey'
+
+cr = 255.
+color_air = (1.,1.,1.) # 5
+color_bas = (250./cr,50./cr,50./cr) # 4
+color_uc = (228./cr,156./cr,124./cr) # 3
+color_lc = (240./cr,209./cr,188./cr) # 2
+color_lit = (155./cr,194./cr,155./cr) # 1
+color_ast = (207./cr,226./cr,205./cr) # 0
 
 
-    colors = [color_ast,
-            color_lit,
-            color_lc,
-            color_uc,
-            #   color_bas,
-            color_air]
-    
-    rhos = np.zeros((100, 10))
+colors = [color_ast,
+          color_lit,
+          color_lc,
+          color_uc,
+        #   color_bas,
+          color_air]
 
-    rhos[:25, :] = 2700
-    rhos[25:50, :] = 2800
-    rhos[50:75, :] = 3300
-    rhos[75:100, :] = 3400
+#Creating a custom colormap according to the list of colors defined above.
+# This colormap will be used to plot the lithology mesh, where each lithology type is represented by a specific color.
 
-    rhos = rhos[::-1, :]
+cmap = ListedColormap(colors)
+np.seterr(divide='ignore')
+# time = time[::-1]
+steps = np.array(xr.open_dataset(f"_strain.nc").steps.values)
+times = np.array(xr.open_dataset(f"_strain.nc").time.values)
+print(f'nx, nz, times: {Nx}, {Nz}, {len(times)}, type')
+fig_format = 'jpeg'
 
-    xA = np.linspace(-0.5, 0.9, 10)
-    yA = np.linspace(0, 1.5, 100)
+def worker(i):
+    lithology = xr.open_dataset("_lithology.nc", cache=False, engine="h5netcdf")["lithology"].isel(time=i).values[::-1,:]
+    strain  = xr.open_dataset("_strain.nc", cache=False, engine="h5netcdf")["strain"].isel(time=i).values[::-1,:]
+    temperature = xr.open_dataset("_temperature.nc", cache=False, engine="h5netcdf")["temperature"].isel(time=i).values
+    return lithology, strain, temperature
 
-    xxA, yyA = np.meshgrid(xA, yA)
+A = np.zeros((100, 10))
 
-    #Creating a custom colormap according to the list of colors defined above.
-    # This colormap will be used to plot the lithology mesh, where each lithology type is represented by a specific color.
+A[:25, :] = 2700
+A[25:50, :] = 2800
+A[50:75, :] = 3300
+A[75:100, :] = 3400
 
-    cmap = ListedColormap(colors)
-    for i in indexs:
-        lithology = lithology_ds["lithology"].isel(time=i).values[::-1, :]
-        strain = strain_ds["strain"].isel(time=i).values[::-1, :]
-        temperature = temperature_ds["temperature"].isel(time=i).values
+A = A[::-1, :]
 
+xA = np.linspace(-0.5, 0.9, 10)
+yA = np.linspace(0, 1.5, 100)
+
+xxA, yyA = np.meshgrid(xA, yA)
+
+with pymp.Parallel() as p:
+    for i in p.range(start, end-step, step):
+    # for i in range(start, end-step, step):
+        steps_model = steps[i] #dataset.steps.values[i]
         fig, axs = plt.subplots(1, 1, figsize=(12, 4), constrained_layout=True)
 
-        current_time = float(times[i])
-        steps_model = float(steps[i])
+        lithology, strain, temperature = worker(i)
 
+        current_time = float(times[i])
+        
         xlims = [0, Lx/1000]
         ylims = [-Lz/1000+40, 0+40]
         axs.text(0.01, 1.035, f'{model_name}', bbox=dict(facecolor='white', edgecolor='white', alpha=0.0), fontsize = 14, zorder=52, transform=axs.transAxes)
@@ -206,22 +262,37 @@ def plot_chunks(indexs):
         
         axs.imshow(lithology, aspect='auto', extent=(0, Lx/1000, -Lz/1000+40, 40), cmap=cmap, vmin=0, vmax=5, alpha=1.0)  
 
+        # strain  = strain_dataset.strain.values[i][::-1,:]
+        # temperature = temperature_dataset.temperature.values[i][::-1,:]   
+
+        # axs.imshow(np.log10(strain), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
         axs.imshow(np.log10(strain), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
         axs.contour(x, z+40, temperature, levels=[500, 600, 700, 800, 900, 1300], colors='r', linewidths=1.0)
         axs.set_ylim(ylims)
         axs.set_xlim(xlims)
 
+        bbox_to_anchor=(0.90,#horizontal position respective to parent_bbox or "loc" position
+                        0.20,# vertical position
+                        0.08,# width
+                        0.25)
+    
+        # bv1 = inset_axes(axs,
+        #                 loc='lower right',
+        #                 width="100%",  # respective to parent_bbox width
+        #                 height="100%",  # respective to parent_bbox width
+        #                 bbox_to_anchor=bbox_to_anchor,
+        #                 bbox_transform=axs.transAxes
+        #                 )
         bv1 = fig.add_axes([0.9,#horizontal position respective to parent_bbox or "loc" position
                         0.40,# vertical position
                         0.07,# width
                         0.15])
 
         air_threshold = 200
-
         bv1.contourf(
             xxA,
             yyA,
-            rhos,
+            A,
             levels=[air_threshold, 2750, 2900, 3365, 3900],
             colors=[color_uc, color_lc, color_lit, color_ast],
             extent=[-0.5, 0.9, 0, 1.5]
@@ -282,54 +353,21 @@ def plot_chunks(indexs):
         # print('saved')
         # print(f'callbacks: {fig.canvas.callbacks.callbacks}')
         plt.close(fig)
-        del fig, axs, bv1, lithology, strain, temperature
+
+        del fig
+        del axs
+        del bv1
+        del lithology
+        del strain
+        del temperature
         if(plot_melt):
-            del incremental_melt, melt
+            del incremental_melt
+            del melt
         gc.collect()
+        # objs = gc.get_objects()
+        # print(f'figures remaining: {sum(isinstance(o, Figure) for o in objs)}')
 
-plot_colorbar = True
-h_air = 40.0
-
-start = 0
-end = int(xr.open_dataset(f"{model_path}/_strain.nc").time.size)
-step = 1
-
-frames = range(start, end-step)
-fig_format = 'jpeg'
-
-chunks = np.array_split(
-    np.arange(start, end-step),
-    12
-)
-
-with Pool(
-    processes=12,
-    initializer=init_worker, #initializer function to call when starting a new process
-    initargs=(model_path, plot_melt), #arguments to pass to the initializer function
-    maxtasksperchild=10
-) as pool:
-    pool.map(plot_chunks, chunks)
-
-make_videos = True
-# make_videos = False
-
-make_gifs = True
-# make_gifs = False
-
-zip_files = True
-# zip_files = False
-
-print("Generating frames...")
-
-color_lower_crust='xkcd:brown'
-
-color_incremental_melt = 'xkcd:bright pink'
-color_depleted_mantle='xkcd:bright purple'
-# topo_from_density = False
-topo_from_density = True
-
-
-
+print("Done!")
 
 ##############################################################################################################################################################################
 if(make_videos):
