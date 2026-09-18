@@ -200,7 +200,7 @@ line_alpha = 1.0
 
 cr = 255.
 color_air = (1.,1.,1.) # 5
-color_bas = (250./cr,50./cr,50./cr) # 4
+color_bas = 'xkcd:dark grey blue' #(250./cr,50./cr,50./cr) # 4
 color_uc = (228./cr,156./cr,124./cr) # 3
 color_lc = (240./cr,209./cr,188./cr) # 2
 color_lit = (155./cr,194./cr,155./cr) # 1
@@ -211,7 +211,7 @@ colors = [color_ast,
           color_lit,
           color_lc,
           color_uc,
-        #   color_bas,
+          color_bas,
           color_air]
 
 #Creating a custom colormap according to the list of colors defined above.
@@ -259,7 +259,7 @@ with pymp.Parallel() as p:
 
         for i in range(chunk_start, min(chunk_start + chunk_size, end)):
             steps_model = steps[i] #dataset.steps.values[i]
-            fig, axs = plt.subplots(1, 1, figsize=(12, 4), constrained_layout=True)
+            fig, axs = plt.subplots(1, 1, figsize=(12, 3), constrained_layout=True)
 
             # lithology, strain, temperature = worker(i)
 
@@ -267,16 +267,18 @@ with pymp.Parallel() as p:
             
             xlims = [0, Lx/1000]
             ylims = [-Lz/1000+40, 0+40]
+            # xlims = [1600, 2200]
+            # ylims = [-150, 40]
             axs.text(0.01, 1.035, f'{model_name}', bbox=dict(facecolor='white', edgecolor='white', alpha=0.0), fontsize = 14, zorder=52, transform=axs.transAxes)
             axs.text(0.5, 1.035, f'Time = {current_time:.2f} Myr', bbox=dict(facecolor='white', edgecolor='white', alpha=0.0), fontsize = 14, zorder=52, transform=axs.transAxes)
             
-            axs.imshow(lithology.isel(time=i).values[::-1, :], aspect='auto', extent=(0, Lx/1000, -Lz/1000+40, 40), cmap=cmap, vmin=0, vmax=5, alpha=1.0)  
+            axs.imshow(lithology.isel(time=i).values[::-1, :], aspect='auto', extent=(0, Lx/1000, -Lz/1000+40, 40), cmap=cmap, vmin=0, vmax=6, alpha=1.0)  
 
             # strain  = strain_dataset.strain.values[i][::-1,:]
             # temperature = temperature_dataset.temperature.values[i][::-1,:]   
 
             # axs.imshow(np.log10(strain), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
-            axs.imshow(np.log10(strain.isel(time=i).values[::-1, :]), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
+            axs.imshow(np.log10(strain.isel(time=i).values[::-1, :]), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2, aspect='auto')
             axs.contour(x, z+40, temperature.isel(time=i).values, levels=[500, 600, 700, 800, 900, 1300], colors='r', linewidths=1.0)
             axs.set_ylim(ylims)
             axs.set_xlim(xlims)
@@ -293,7 +295,7 @@ with pymp.Parallel() as p:
             #                 bbox_to_anchor=bbox_to_anchor,
             #                 bbox_transform=axs.transAxes
             #                 )
-            bv1 = fig.add_axes([0.9,#horizontal position respective to parent_bbox or "loc" position
+            bv1 = fig.add_axes([0.85,# 0.9 #horizontal position respective to parent_bbox or "loc" position
                             0.40,# vertical position
                             0.07,# width
                             0.15])
@@ -353,14 +355,14 @@ with pymp.Parallel() as p:
                 axs.text(0.10, 1.035, r'Melt Fraction $\left(\frac{\partial \phi}{\partial t}\right)$', color='xkcd:bright pink', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
                 axs.text(0.25, 1.035, r'Depleted Mantle ($\phi$)', color='xkcd:bright purple', fontsize=text_fsize, transform=axs.transAxes, zorder=60)
 
-                figname = f"{model_name}_lithology_and_PTt_MeltFrac_{str(int(steps_model)).zfill(6)}.{fig_format}"
+                figname = f"{model_name}_lithology_MeltFrac_{str(int(steps_model)).zfill(6)}.{fig_format}"
             else:
-                figname = f"{model_name}_lithology_and_PTt_{str(int(steps_model)).zfill(6)}.{fig_format}"
+                figname = f"{model_name}_lithology_{str(int(steps_model)).zfill(6)}.{fig_format}"
 
             proc = psutil.Process(os.getpid())
-            print(f"before - worker ID:{os.getpid()}; Memory Usage: {proc.memory_info().rss/1024**3:.2f} GB")
+            # print(f"before - worker ID:{os.getpid()}; Memory Usage: {proc.memory_info().rss/1024**3:.2f} GB")
             fig.savefig(f"_output/{figname}", dpi=300)
-            print(f"after - worker ID:{os.getpid()}; Memory Usage: {proc.memory_info().rss/1024**3:.2f} GB")
+            # print(f"after - worker ID:{os.getpid()}; Memory Usage: {proc.memory_info().rss/1024**3:.2f} GB")
             # print('saved')
             # print(f'callbacks: {fig.canvas.callbacks.callbacks}')
             plt.close(fig)
@@ -389,7 +391,7 @@ if(make_videos):
 
     fps = 24
     for prop in properties:
-        videoname = f'{model_path}/_output/{model_name}_lithology_and_PTt'
+        videoname = f'{model_path}/_output/{model_name}_lithology'
 
         if(plot_melt):
             videoname = f'{videoname}_MeltFrac'
@@ -447,7 +449,7 @@ if(make_videos):
 if(make_gifs):
     print("Converting videos to gifs...")
     for prop in properties:
-        gifname = f'{model_path}/_output/{model_name}_lithology_and_PTt'
+        gifname = f'{model_path}/_output/{model_name}_lithology'
 
         if(plot_melt):
             gifname = f'{gifname}_MeltFrac'
