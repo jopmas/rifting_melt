@@ -266,7 +266,6 @@ with pymp.Parallel() as p:
 
             # lithology, strain, temperature = worker(i)
 
-
             current_time = float(times[i])
             
             # xlims = [0, Lx/1000]
@@ -299,6 +298,7 @@ with pymp.Parallel() as p:
             #                 bbox_to_anchor=bbox_to_anchor,
             #                 bbox_transform=axs.transAxes
             #                 )
+
             bv1 = fig.add_axes([0.85,# 0.9 #horizontal position respective to parent_bbox or "loc" position
                             0.40,# vertical position
                             0.07,# width

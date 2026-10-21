@@ -48,8 +48,8 @@ if not os.path.isdir(output_path):
 
 plot_isotherms = True
 # plot_isotherms = False
-plot_melt = True
-# plot_melt = False
+# plot_melt = True
+plot_melt = False
 plot_particles=False
 
 
