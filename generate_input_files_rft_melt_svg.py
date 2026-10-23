@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import shutil
+import argparse
 import glob
 from scipy.interpolate import interp1d
 from scipy.interpolate import interp2d
@@ -200,12 +201,6 @@ if(crameri_colors):
 #Setting the kind of tectonic scenario and number of cores
 ###############################################################################################################################################
 
-scenario_kind = 'double_keel'
-
-experiemnts = {
-               'double_keel': 'Rifting',
-               }
-
 # ncores = 20
 # ncores = 64
 # ncores = 70
@@ -224,34 +219,44 @@ nodes = (ncores + cores_per_node - 1) // cores_per_node #ceil division
 # Domain and interfaces
 ###############################################################################################################################################
 
-Lx = 1600 * 1.0e3
-# total model vertical extent (m)
-Lz = 300 * 1.0e3
-# number of points in horizontal direction
-Nx = 1601
-# number of points in vertical direction
-Nz = 301
+#Scenario geometry drawn in Inkscape.
+#Each shape of the SVG is a MandyocLayer described by its label (layer_label), title (name in the legend)
+#and description (rheology, C, rho, H, ...). See svg2interfaces.py.
+#The shape labelled 'domain' gives the domain (Lx, Lz) and the resolution (dx, dz) in its description.
+#Usage: python generate_input_files_rft_melt_svg.py cenario.svg [--dx 1] [--dz 1]
+#       --dx and --dz (km) override the resolution of the SVG, e.g. for resolution tests
+
+functions_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'functions') #folder with svg2interfaces.py and mandyoc_layers.py
+sys.path.insert(0, functions_path) #first, so other copies of the modules are not imported
+from svg2interfaces import layers_from_svg, write_interfaces, read_domain, points_from_spacing
+from mandyoc_layers import MandyocLayer, Basalt
+
+parser = argparse.ArgumentParser(description='Create the Mandyoc input files of a scenario drawn in an SVG file')
+parser.add_argument('svg_file', help='SVG file with the scenario')
+parser.add_argument('--dx', type=float, help='horizontal resolution [km] (default: from the domain shape of the SVG)')
+parser.add_argument('--dz', type=float, help='vertical resolution [km] (default: from the domain shape of the SVG)')
+args = parser.parse_args()
+
+svg_file = args.svg_file
+if(not os.path.isfile(svg_file)):
+    sys.exit(f"SVG file not found: {svg_file}")
+
+domain = read_domain(svg_file)
+if(domain is None):
+    sys.exit(f"No shape labelled 'domain' in {svg_file}. Draw a rectangle over the model domain, label it 'domain' "
+             "and write Lx, Lz, dx and dz in its description (see svg2interfaces.py).")
+
+# total model horizontal and vertical extent (m)
+Lx = domain['Lx']
+Lz = domain['Lz']
+# number of points in horizontal and vertical direction
+Nx = points_from_spacing(Lx, args.dx * 1.0e3, 'dx') if(args.dx) else domain['Nx']
+Nz = points_from_spacing(Lz, args.dz * 1.0e3, 'dz') if(args.dz) else domain['Nz']
 
 x = np.linspace(0, Lx, Nx)
 z = np.linspace(Lz, 0, Nz)
 X, Z = np.meshgrid(x, z)
 dz = Lz / (Nz - 1)
-
-#Scenario geometry drawn in Inkscape.
-#Each shape of the SVG is a MandyocLayer described by its label (layer_label), title (name in the legend)
-#and description (rheology, C, rho, H, ...). See svg2interfaces.py.
-#The SVG page is mapped to the domain Lx x Lz.
-#Usage: python generate_input_files_rft_melt_svg.py cenario.svg
-functions_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'functions') #folder with svg2interfaces.py and mandyoc_layers.py
-sys.path.append(functions_path)
-from svg2interfaces import layers_from_svg, write_interfaces
-from mandyoc_layers import MandyocLayer, Basalt
-
-if(len(sys.argv) != 2):
-    sys.exit(f"Usage: python {os.path.basename(__file__)} <scenario.svg>")
-svg_file = sys.argv[1]
-if(not os.path.isfile(svg_file)):
-    sys.exit(f"SVG file not found: {svg_file}")
 
 #Keep a copy of the SVG in the scenario folder (it is zipped with the input files)
 if(not os.path.exists(os.path.basename(svg_file)) or not os.path.samefile(svg_file, os.path.basename(svg_file))):
@@ -259,7 +264,6 @@ if(not os.path.exists(os.path.basename(svg_file)) or not os.path.samefile(svg_fi
 
 #Labels of the shapes in the SVG used to build the initial temperature, velocity bc and plots
 asthenosphere_label = 'asthenosphere'
-lithospheric_mantle_label = 'lithospheric_mantle'
 seed_label = 'weak_seed'
 
 #Vertical resolution used to locate the interfaces in the SVG (m)
@@ -274,7 +278,17 @@ if(len(layer_indices(layers, asthenosphere_label)) == 0):
 
 #Basalt layer with zero thickness just below the sticky air.
 #It can not be drawn in the SVG and receives the melt extracted by Mandyoc (magmatic_layer in param.txt)
-add_basalt_layer = True
+
+magmatism = 'on'
+# magmatism = 'off'
+magmatism_extraction = 'off'
+magmatism_Ts0 = 1080.0
+
+if(magmatism == 'on' and magmatism_extraction == 'on'):
+    add_basalt_layer = True
+else:
+    add_basalt_layer = False
+
 if(add_basalt_layer):
     basalt = MandyocLayer('basalt', Basalt,
                           density=2900.0,
@@ -383,11 +397,6 @@ else:
 print_step_files                 = True
 
 checkered = False
-
-magmatism = 'on'
-# magmatism = 'off'
-magmatism_extraction = 'off'
-magmatism_Ts0 = 1080.0
 
 rheol = 19
 
@@ -613,14 +622,25 @@ else:
 if(velocity_from_ascii == True):
     fac_air = 10.0e3
 
-    #thickness of sticky air and lithospheric mantle at the left boundary (x = 0)
+    #thickness of sticky air at the left boundary (x = 0)
     thickness_sa_bc = thickness_sa[0]
-    thickness_mlit_bc = layer_thickness(layers, lithospheric_mantle_label, 0)
+    #Reference thickness for the region with constant velocity at the boundaries (+ 20 km), taken where it is thickest:
+    #   'lithosphere': surface to the top of the asthenosphere, crust included (thickness_crat_bot in the double keel scripts)
+    #   'lithospheric_mantle': mantle units (olivine rheologies) above the asthenosphere (thickness_mlit in generate_input_files_rft_melt.py)
+    h_v_reference = 'lithosphere'
+    # h_v_reference = 'lithospheric_mantle'
+
+    if(h_v_reference == 'lithosphere'):
+        thickness_ref_bc = thickness_litho.max()
+    else:
+        mantle_rheologies = ['wet_olivine', 'dry_olivine']
+        thickness_ref_bc = np.max([sum(slot_thickness(layers, i, ix) for i in range(idx_ast+1, len(layers))
+                                       if layers[i].rheology_name in mantle_rheologies) for ix in range(Nx)])
 
     # 1 cm/year
     vL = (0.5*velocity/100) / (365 * 24 * 3600)  # m/s
 
-    h_v_const = thickness_mlit_bc + 20.0e3  #thickness with constant velocity 
+    h_v_const = thickness_ref_bc + 20.0e3  #thickness with constant velocity
     ha = Lz - thickness_sa_bc - h_v_const  # difference
 
     vR = 2 * vL * (h_v_const + fac_air + ha) / ha  # this is to ensure integral equals zero
@@ -735,18 +755,35 @@ if(sp_surface_processes == True):
 
 
 
-##########plot temperature field with countourf
-# plt.close()
-# fig, ax0 = plt.subplots(nrows=1, ncols=1, constrained_layout=True, figsize=(16, 8), sharey=True)
-# thickness_air = 40
-# im = ax0.contourf(X / 1.0e3, (Z - thickness_air) / 1.0e3, T,
-#                   levels=np.arange(0, np.max(T) + 100, 100))
-# ax0.set_ylim((Lz - thickness_air) / 1.0e3, -thickness_air / 1000)
-# ax0.set_ylabel("km", fontsize=label_size)
-# ax0.set_xlabel("$^\circ$C", fontsize=label_size)
-# cbar = fig.colorbar(im, orientation='horizontal', ax=ax0)
-# cbar.set_label("Temperature [°C]")
-# fig.savefig('initial_temperature.png', dpi=300)
+##############################################################################
+# Plot of the initial temperature field with the layer interfaces
+##############################################################################
+
+plt.close()
+fig, ax0 = plt.subplots(nrows=1, ncols=1, constrained_layout=True, figsize=(16, 6))
+
+#depth relative to the surface at x_profile, as in numerical_setup.png
+im = ax0.contourf(X / 1.0e3, (-Z + thickness_sa_profile) / 1.0e3, T,
+                  levels=np.arange(0, np.max(T) + 100, 100), cmap='inferno')
+isotherms = ax0.contour(X / 1.0e3, (-Z + thickness_sa_profile) / 1.0e3, T,
+                        levels=[600, 1000, 1300], colors='w', linewidths=1.0, linestyles='--')
+ax0.clabel(isotherms, fmt='%d °C', fontsize=10)
+
+#layer interfaces (base of each layer)
+for layer in layers[1:]:
+    ax0.plot(x / 1.0e3, (-layer.interface + thickness_sa_profile) / 1.0e3, color='k', lw=0.6)
+
+ax0.set_xlim(0, Lx / 1.0e3)
+ax0.set_ylim(-Lz/1000+thickness_sa_profile/1000, 0+thickness_sa_profile/1000)
+ax0.tick_params(labelsize=12)
+ax0.set_xlabel("Distance [km]", fontsize=14)
+ax0.set_ylabel("Depth [km]", fontsize=14)
+ax0.set_title(f"Initial temperature field ({os.path.basename(svg_file)})", fontsize=14)
+cbar = fig.colorbar(im, orientation='vertical', ax=ax0, pad=0.01)
+cbar.set_label("Temperature [°C]", fontsize=12)
+cbar.ax.tick_params(labelsize=10)
+fig.savefig('initial_temperature.png', dpi=300)
+plt.close()
 
 ##############################################################################
 #
@@ -772,16 +809,27 @@ axs.set_xlabel(f"Distance = {Lx/1000:.0f} km\nResolution = {dx/1000:.0f} km", fo
 axs.set_ylabel(f"Depth = {Lz/1000:.0f} km\nResolution = {dz/1000:.0f} km", fontsize=16)
 
 #plotting ghost points to create a legend to the layers (one entry per label, from top to bottom)
-#thickness h is taken at x_profile
+#thickness h in the legend:
+#   bodies (units that do not reach both sides of the domain, e.g. a basin): maximum thickness (depocentre)
+#   bottom unit (asthenosphere): range of thickness along x
+#   other layers: most common thickness along x (their reference thickness)
 legend_layers = {}
 for layer in layers[::-1]:
     if(layer.layer_label != seed_label):
         legend_layers.setdefault(layer.layer_label, layer)
 
+def legend_thickness(label):
+    th = layer_thickness(layers, label, slice(None)) / 1.0E3 #km, along x
+    if(th[0] <= 0 or th[-1] <= 0):
+        return f"{th.max():.0f} km"
+    if(label == layers[0].layer_label and np.round(th.min()) != np.round(th.max())):
+        return f"{th.min():.0f}-{th.max():.0f} km"
+    values, counts = np.unique(np.round(th[th > 0], 1), return_counts=True)
+    return f"{values[np.argmax(counts)]:.0f} km" if(len(values)) else "0 km"
+
 legend_elements = []
 for label, layer in legend_layers.items():
-    h = layer_thickness(layers, label, idx_profile)
-    legend_label = f"{layer.title}\n{layer.effective_viscosity_scale_factor:g} x {layer.rheology_name.replace('_', ' ')}\n"+fr"$\rho$ = {layer.density:.0f} kg/m³"+f"\n$h$ = {h/1.0E3:.0f} km"
+    legend_label = f"{layer.title}\n{layer.effective_viscosity_scale_factor:g} x {layer.rheology_name.replace('_', ' ')}\n"+fr"$\rho$ = {layer.density:.0f} kg/m³"+f"\n$h$ = {legend_thickness(label)}"
     legend_elements.append(Patch(facecolor=layer.color, edgecolor='black', label=legend_label))
 
 fig.subplots_adjust(bottom=0.25)
@@ -815,7 +863,7 @@ if(len(idx_seed) > 0):
         width_seed = (end - begin) * dx
         thickness_seed = np.max(seed_base[cols] - seed_top[cols])
         depth_seed = np.mean((seed_base[cols] + seed_top[cols]) / 2.0)
-        axs.plot(x_seed/1000, -(depth_seed - thickness_sa_profile)/1000, 'x', color='k', lw=1.0)
+        # axs.plot(x_seed/1000, -(depth_seed - thickness_sa_profile)/1000, 'x', color='k', lw=1.0)
         axs.text(x_seed/1000, -(np.max(seed_base[cols]) - thickness_sa_profile)/1000 - 2, f'{seed_title}\n{width_seed/1000:.0f}x{thickness_seed/1000:.0f} km²', color='k', fontsize=12, ha='center', va='top')
 
 
@@ -997,7 +1045,6 @@ for i, layer in enumerate(layers):
 layers_infos.append(f"\tlithosphere: {thickness_litho[idx_profile]/1.0e3:.1f} km")
 layers_infos.append(f"\tmagmatic layer: {magmatic_layer} ({layers[magmatic_layer].layer_label})")
 
-print(f"Scenario kind: {experiemnts[scenario_kind]}")
 print(f"N cores: {ncores}")
 print('Domain parameters:')
 print(f"\tLx: {Lx*1.0e-3} km")
@@ -1030,7 +1077,6 @@ print(f'rheology model in param file: {rheol}')
 scenario_infos = ['SCENARIO INFOS:']
 scenario_infos.append(' ')
 scenario_infos.append('Name: ' + path[-1])
-scenario_infos.append(f"Scenario kind: {experiemnts[scenario_kind]}")
 scenario_infos.append(f"N cores: {ncores}")
 scenario_infos.append(' ')
 scenario_infos.append('Domain parameters:')
@@ -1072,7 +1118,7 @@ np.savetxt('infos_'+path[-1] + '.txt', scenario_infos, fmt="%s")
 ##############################################################################
 
 linux = False
-mac = False
+mac = True
 aguia = False
 hypatia = True
 
@@ -1093,7 +1139,7 @@ if(linux):
             MANDYOC_PATH=$HOME/opt/mandyoc
             NUMBER_OF_CORES=20
             touch FD.out
-            $MPI_PATH/mpirun -n $NUMBER_OF_CORES $MANDYOC_PATH/mandyoc {mandyoc_options} | tee FD.out
+            $MPI_PATH/mpirun -n $NUMBER_OF_CORES $MANDYOC_PATH/bin/mandyoc {mandyoc_options} | tee FD.out
         '''
     with open('run-linux.sh', 'w') as f:
         for line in run_linux.split('\n'):
@@ -1102,7 +1148,8 @@ if(linux):
                 f.write(' '.join(line.split()) + '\n')
 
 if(mac):
-    claudio=True
+    # claudio=True
+    claudio=False
     dirname = '${PWD##*/}'
 
     if(claudio):
@@ -1155,13 +1202,13 @@ if(mac):
     else:
         run_mac = f'''
                 #!/bin/bash
-                MPI_PATH=$HOME/opt/petsc/arch-label-optimized/bin
+                MPI_PATH=/opt/miniconda3/envs/petsc-env/bin/
                 MANDYOC_PATH=$HOME/opt/mandyoc
                 NUMBER_OF_CORES=6
                 touch FD.out
-                $MPI_PATH/mpirun -n $NUMBER_OF_CORES $MANDYOC_PATH/mandyoc {mandyoc_options} | tee FD.out
-                bash $HOME/Doutorado/cenarios/mandyoc/scripts/zipper_gcloud.sh
-                #bash $HOME/Doutorado/cenarios/mandyoc/scripts/clean_gcloud.sh
+                $MPI_PATH/mpiexec -n $NUMBER_OF_CORES $MANDYOC_PATH/bin/mandyoc {mandyoc_options} | tee FD.out
+                bash zipper.sh
+                bash clean.sh
             '''
     with open('run_mac.sh', 'w') as f:
         for line in run_mac.split('\n'):
@@ -1307,29 +1354,29 @@ zipper = f'''
 
         # Lista de padrões
         patterns=(
-            "bc_velocity_*.txt"
-            "density_*.txt"
-            "heat_*.txt"
-            "pressure_*.txt"
-            "sp_surface_global_*.txt"
-            "strain_*.txt"
-            "temperature_*.txt"
-            "time_*.txt"
-            "velocity_*.txt"
-            "viscosity_*.txt"
-            "scale_bcv.txt"
-            "step*.txt"
-            "Phi*.txt"
-            "dPhi*.txt"
-            "X_depletion*.txt"
-            "*.bin*.txt"
-            "bc*-1.txt"
-            "*.log"
-            )
+                "bc_velocity_*.txt"
+                "density"
+                "heat"
+                "pressure"
+                "surface"
+                "strain"
+                "temperature"
+                "time"
+                "velocity"
+                "viscosity"
+                "scale_bcv.txt"
+                "steps"
+                "lithos"
+                "Phi"
+                "dPhi"
+                "X_depletion"
+                "*.bin*.txt"
+                "bc*-1.txt"
+                )
 
         # Faz um loop e usa find para evitar o erro "argument list too long"
         for pat in "${{patterns[@]}}"; do
-            find . -maxdepth 1 -type f -name "$pat" -exec zip -u "$DIRNAME.zip" {{}} +
+            find . -maxdepth 1 -name "$pat" -exec zip -u "$DIRNAME.zip" {{}} +
         done
     '''
 with open('zipper.sh', 'w') as f:
@@ -1343,28 +1390,29 @@ clean = f'''
 
         # Lista de padrões
         patterns=(
-            "bc_velocity_*.txt"
-            "density_*.txt"
-            "heat_*.txt"
-            "pressure_*.txt"
-            "sp_surface_global_*.txt"
-            "strain_*.txt"
-            "temperature_*.txt"
-            "time_*.txt"
-            "velocity_*.txt"
-            "viscosity_*.txt"
-            "scale_bcv.txt"
-            "step*.txt"
-            "Phi*.txt"
-            "dPhi*.txt"
-            "X_depletion*.txt"
-            "*.bin*.txt"
-            "bc*-1.txt"
-            )
+                "bc_velocity_*.txt"
+                "density"
+                "heat"
+                "pressure"
+                "surface"
+                "strain"
+                "temperature"
+                "time"
+                "velocity"
+                "viscosity"
+                "scale_bcv.txt"
+                "steps"
+                "lithos"
+                "Phi"
+                "dPhi"
+                "X_depletion"
+                "*.bin*.txt"
+                "bc*-1.txt"
+                )
 
         # Para cada padrão, procurar e remover com segurança
         for pat in "${{patterns[@]}}"; do
-            find . -maxdepth 1 -type f -name "$pat" -exec rm -f {{}} +
+            find . -maxdepth 1 -name "$pat" -exec rm -f {{}} +
         done
     '''
 with open('clean.sh', 'w') as f:

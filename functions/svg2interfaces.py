@@ -20,15 +20,39 @@ Each filled shape is a body of rock described by its object properties
                  override the values of the rheology). Long names such as
                  density or radiogenic_heat_production are also accepted.
 
+                 Optional: h = 120 km (or h = 120e3 m), the reference
+                 thickness of the unit, so the drawing does not need to be in
+                 vertical scale. See rescale_thickness:
+                   - layers (units that reach both sides of the domain): their most
+                     common drawn thickness becomes h and the same factor is
+                     applied in every column, so thinned regions keep their
+                     drawn proportion. Layers without h keep the drawn thickness;
+                   - bodies (seeds, basins, weak zones, ...): without h they
+                     follow the scaling of the unit they are drawn over; with
+                     h they get that thickness and the unit around them
+                     absorbs the difference, so the units below do not move;
+                   - the bottom unit (e.g. asthenosphere) fills the rest of
+                     the domain, so it can not have h.
+
 Shapes with the same label are the same unit, so the description only needs
 to be written once. A shape without description inherits the one of the group
 (e.g. an Inkscape layer) that contains it. Shapes without any description are
 ignored (annotations, arrows, ...). The fill colour is used only in the plot.
 
-The SVG page is mapped to the model domain: top-left corner = (x=0, z=0),
-bottom-right = (Lx, -Lz). x and z are scaled independently, so the drawing may
-be vertically exaggerated. Shapes are painted in document order (later shapes
-cover earlier ones), as Inkscape renders them.
+Domain: a shape labelled "domain" (usually a rectangle without fill, e.g. in its
+own Inkscape layer) gives the model domain. Its bounding box is mapped to the
+domain, top-left corner = (x=0, z=0), bottom-right = (Lx, -Lz), and its
+description gives the dimensions and the resolution of the Mandyoc grid:
+
+                     Lx = 1600 km
+                     Lz = 400 km
+                     dx = 2 km        (or Nx = 801)
+                     dz = 2 km        (or Nz = 201)
+
+Without a domain shape the SVG page is the domain and Lx, Lz, Nx must be given.
+x and z are scaled independently, so the drawing may be vertically
+exaggerated. Shapes are painted in document order (later shapes cover earlier
+ones), as Inkscape renders them.
 
 Since Mandyoc layers are bounded by single-valued interfaces z(x), the script
 reads, for every column x, the sequence of units from bottom to top and finds a
@@ -39,12 +63,14 @@ is a MandyocLayer whose interface is its base depth, as in generate_input_files*
 
 Usage
 -----
-    python svg2interfaces.py scenario.svg --Lx 1600 --Lz 300 --Nx 1601 -o interfaces.txt --plot setup.png
+    python svg2interfaces.py scenario.svg -o interfaces.txt --plot setup.png
+    python svg2interfaces.py scenario.svg --dx 1     (override the horizontal resolution of the SVG)
 
 or, from another script:
 
-    from svg2interfaces import layers_from_svg
-    layers = layers_from_svg("scenario.svg", Lx=1600e3, Lz=300e3, Nx=1601)
+    from svg2interfaces import read_domain, layers_from_svg
+    domain = read_domain("scenario.svg")
+    layers = layers_from_svg("scenario.svg", domain["Lx"], domain["Lz"], domain["Nx"])
 
 Requires: numpy, matplotlib, svgelements (pip install svgelements)
 '''
@@ -53,6 +79,7 @@ import argparse
 import ast
 import copy
 import operator
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -67,6 +94,7 @@ from mandyoc_layers import MandyocLayer, get_rheology
 SVG_NS = "{http://www.w3.org/2000/svg}"
 INKSCAPE_LABEL = "{http://www.inkscape.org/namespaces/inkscape}label"
 SHAPE_TAGS = {"rect", "path", "circle", "ellipse", "polygon", "polyline"}
+DOMAIN_LABEL = "domain"  # label (or id) of the shape that gives the model domain
 
 # key in the description -> attribute of MandyocLayer
 PROPERTY_KEYS = {
@@ -112,9 +140,89 @@ def eval_number(expr):
     return _eval(ast.parse(expr.strip(), mode="eval"))
 
 
+def parse_thickness(value, where, name="h"):
+    '''Read a length such as "120 km" or "120e3 m" and return it in m.'''
+    match = re.fullmatch(r"(.+?)\s*(km|m)", value.strip())
+    if match is None:
+        sys.exit(f"{where}: give the unit of {name} (km or m), e.g. {name} = 120 km")
+    try:
+        number = eval_number(match.group(1))
+    except (ValueError, SyntaxError):
+        sys.exit(f"{where}: could not read the value of {name} = {value}")
+    thickness = number * (1.0e3 if match.group(2) == "km" else 1.0)
+    if thickness <= 0:
+        sys.exit(f"{where}: {name} must be positive.")
+    return thickness
+
+
+def points_from_spacing(length, spacing, name):
+    '''Number of grid points for a grid spacing; the spacing must divide the length.'''
+    intervals = length / spacing
+    if abs(intervals - round(intervals)) > 1e-6:
+        sys.exit(f"{name} = {spacing / 1e3:g} km does not divide the domain ({length / 1e3:g} km).")
+    return int(round(intervals)) + 1
+
+
+def read_domain(svg_file):
+    '''
+    Read the shape labelled "domain" (see the module docstring).
+    Return dict(id, Lx, Lz, Nx, Nz) with lengths in m, or None if the SVG has no domain shape.
+    '''
+    root = ET.parse(svg_file).getroot()
+    shapes = [el for el in root.iter() if el.tag.replace(SVG_NS, "") in SHAPE_TAGS
+              and DOMAIN_LABEL in (el.get(INKSCAPE_LABEL), el.get("id"))]
+    if not shapes:
+        return None
+    if len(shapes) > 1:
+        sys.exit(f"The SVG has {len(shapes)} shapes labelled '{DOMAIN_LABEL}'; keep only one.")
+    el = shapes[0]
+    where = f"Domain shape (id={el.get('id')})"
+    if el.get("id") is None:
+        sys.exit(f"{where}: the domain shape has no id. Save the file with Inkscape to create it.")
+    desc = el.find(SVG_NS + "desc")
+    if desc is None or not (desc.text or "").strip():
+        sys.exit(f"{where}: write Lx, Lz and the resolution (dx and dz, or Nx and Nz) in its description.")
+
+    values = {}
+    for line in desc.text.splitlines():
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            sys.exit(f"{where}: unexpected line '{line}' in the description.")
+        key, value = (s.strip() for s in line.split("=", 1))
+        if key in ("Lx", "Lz", "dx", "dz"):
+            values[key] = parse_thickness(value, where, key)
+        elif key in ("Nx", "Nz"):
+            try:
+                values[key] = int(value)
+            except ValueError:
+                sys.exit(f"{where}: {key} must be an integer.")
+        else:
+            sys.exit(f"{where}: unknown key '{key}'. Use Lx, Lz, dx, dz (or Nx, Nz).")
+
+    for key in ("Lx", "Lz"):
+        if key not in values:
+            sys.exit(f"{where}: missing {key} in the description.")
+    domain = dict(id=el.get("id"), Lx=values["Lx"], Lz=values["Lz"])
+    for d, N, L in (("dx", "Nx", "Lx"), ("dz", "Nz", "Lz")):
+        if d in values:
+            domain[N] = points_from_spacing(values[L], values[d], d)
+            if N in values and values[N] != domain[N]:
+                sys.exit(f"{where}: {d} and {N} do not agree; give only one of them.")
+        elif N in values:
+            domain[N] = values[N]
+        else:
+            sys.exit(f"{where}: give the resolution {d} (or {N}) in the description.")
+    return domain
+
+
 def parse_description(text, where):
-    '''Parse the description of a shape into (rheology class, {MandyocLayer attribute: value}).'''
-    rheology, props = None, {}
+    '''
+    Parse the description of a shape into
+    (rheology class, {MandyocLayer attribute: value}, reference thickness in m or None).
+    '''
+    rheology, props, thickness = None, {}, None
     for line in text.splitlines():
         line = line.split("#")[0].strip()
         if not line:
@@ -127,6 +235,9 @@ def parse_description(text, where):
         key, value = (s.strip() for s in line.split("=", 1))
         if key.lower() == "rheology":
             rheology = value
+            continue
+        if key == "h":
+            thickness = parse_thickness(value, where)
             continue
         if key not in PROPERTY_KEYS:
             sys.exit(f"{where}: unknown property '{key}'. Use {', '.join(rheological_symbols)}.")
@@ -144,7 +255,7 @@ def parse_description(text, where):
     missing = [s for s in ["C", "rho", "H"] if PROPERTY_KEYS[s] not in props]
     if missing:
         sys.exit(f"{where}: missing {', '.join(missing)} in the description.")
-    return rheology, props
+    return rheology, props, thickness
 
 
 def read_units(svg_file):
@@ -166,7 +277,7 @@ def read_units(svg_file):
     pending = []  # shapes with a label but no description of their own
 
     for el in root.iter():
-        if el.tag.replace(SVG_NS, "") not in SHAPE_TAGS:
+        if el.tag.replace(SVG_NS, "") not in SHAPE_TAGS or DOMAIN_LABEL in (el.get(INKSCAPE_LABEL), el.get("id")):
             continue
         # nearest element (itself or a group above it) with a description
         node = el
@@ -180,9 +291,9 @@ def read_units(svg_file):
 
         label = label_of(node)
         where = f"Shape '{label}' (id={node.get('id')})"
-        rheology, props = parse_description(child_text(node, "desc"), where)
-        unit = dict(rheology=rheology, props=props, title=child_text(node, "title"))
-        if label in units and (units[label]["rheology"], units[label]["props"]) != (rheology, props):
+        rheology, props, thickness = parse_description(child_text(node, "desc"), where)
+        unit = dict(rheology=rheology, props=props, thickness=thickness, title=child_text(node, "title"))
+        if label in units and (units[label]["rheology"], units[label]["props"], units[label]["thickness"]) != (rheology, props, thickness):
             sys.exit(f"{where}: another shape with the same label has a different description.")
         units.setdefault(label, unit)
         shape_unit[el.get("id")] = label
@@ -224,7 +335,8 @@ def shape_to_mplpath(shape, n_curve=32):
 
 def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
     '''
-    Sample the SVG on a (Nzs, Nx) grid and return the unit index of each point (-1 = empty).
+    Sample the SVG on a (Nzs, Nx) grid and return the unit index of each point (-1 = empty)
+    and the unit it covers (the one that would be there without it, -1 = none).
     Also return the fill colour of each unit (from its first shape).
     '''
     svg = se.SVG.parse(svg_file, reify=True)
@@ -248,6 +360,7 @@ def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
     pts = np.column_stack([XS.ravel(), YS.ravel()])
 
     grid = -np.ones(XS.shape, dtype=int)
+    under = -np.ones(XS.shape, dtype=int)  # unit covered by the one painted at each point (-1 = none)
     colors = {}
     for el in svg.elements():
         if not isinstance(el, se.Shape) or el.id not in shape_unit:
@@ -267,9 +380,11 @@ def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
             continue
         inside = np.zeros(len(pts), dtype=bool)
         inside[sel] = mpath.contains_points(pts[sel])
+        covered = inside & (grid.ravel() != iunit)
+        under.ravel()[covered] = grid.ravel()[covered]
         grid.ravel()[inside] = iunit
 
-    return x, zdepth, dz, grid, colors
+    return x, zdepth, dz, grid, under, colors
 
 
 def scs(a, b):
@@ -344,18 +459,155 @@ def build_stack(grid, dz, Lz, unit_names):
     return stack, unique, base
 
 
+def rescale_thickness(stack, base, grid, under, unit_names, units, Lz, dz):
+    '''
+    Scale the drawing so that the units with h get that reference thickness.
+
+    Each point of the drawing gets a vertical scale factor and, in each column,
+    the depth of the interfaces is integrated from the top:
+      - layers (units that reach both sides of the domain) with h: h / reference, where the
+        reference is their most common drawn thickness (where they are not
+        thinned or thickened). Thinned regions keep their drawn proportion;
+      - layers without h: 1 (drawn thickness);
+      - bodies (units that do not reach both sides: seeds, basins, weak
+        zones, ...) without h: the factor of the unit they are drawn over (host);
+      - bodies with h: h / reference, and their host in the same column absorbs
+        the difference, so the units below do not move.
+    The bottom unit fills the rest of the domain, so it can not have h.
+
+    Return the new base depths (n_layers, Nx) and a list of messages describing the scaling.
+    '''
+    Nzs, Nx = grid.shape
+    n_units = len(unit_names)
+    has_h = np.array([units[name]["thickness"] is not None for name in unit_names])
+    present = np.array([(grid == u).any(axis=0) for u in range(n_units)])  # (n_units, Nx)
+    is_body = present.any(axis=1) & ~(present[:, 0] & present[:, -1])  # layers reach both sides of the domain
+
+    def host_of(u):
+        '''Unit most covered by u'''
+        hosts = under[(grid == u) & (under >= 0)]
+        return int(np.bincount(hosts).argmax()) if hosts.size else -1
+
+    # factor of the units with h
+    factor = np.ones(n_units)
+    report = []
+    for u, name in enumerate(unit_names):
+        if not has_h[u] or not present[u].any():
+            continue
+        if u == stack[0]:
+            sys.exit(f"Unit '{name}' is the bottom layer and fills the rest of the domain: remove h from its description.")
+        thickness = (grid == u).sum(axis=0)[present[u]]  # drawn thickness in samples, where present
+        values, counts = np.unique(thickness, return_counts=True)
+        reference = values[np.argmax(counts)] * dz
+        share = counts.max() / present[u].sum()
+        if share < 0.2:
+            print(f"Warning: unit '{name}' has no clear constant thickness (the most common one, "
+                  f"{reference / 1e3:.1f} km, occurs in {100 * share:.0f}% of its columns). Check the scaling to h.")
+        factor[u] = units[name]["thickness"] / reference
+        kind = "body" if is_body[u] else "layer"
+        report.append(f"{kind} '{name}': drawn {reference / 1e3:.1f} km (in {100 * share:.0f}% of its columns) "
+                      f"-> h = {units[name]['thickness'] / 1e3:.1f} km (factor {factor[u]:.3f})")
+
+    # effective factor of each unit: bodies without h follow their host
+    def effective_factor(u, depth=0):
+        if u < 0:
+            return 1.0
+        if has_h[u] or not is_body[u] or depth > n_units:
+            return factor[u]
+        return effective_factor(host_of(u), depth + 1)
+    effective = np.array([effective_factor(u) for u in range(n_units)])
+
+    def host_factor(mask):
+        '''Factor of the units covered at the points of mask'''
+        hosts = under[mask]
+        return np.where(hosts >= 0, effective[np.maximum(hosts, 0)], 1.0)
+
+    F = np.ones((Nzs, Nx))
+    for u, name in enumerate(unit_names):
+        mask = grid == u
+        if is_body[u] and not has_h[u]:
+            F[mask] = host_factor(mask)
+            if mask.any() and (factor != 1).any():
+                host = host_of(u)
+                report.append(f"body '{name}': no h, follows the scaling of '{unit_names[host] if host >= 0 else '-'}'")
+        else:
+            F[mask] = factor[u]
+
+    # bodies with h: their host absorbs, in each column, the difference to the host scaling
+    for u, name in enumerate(unit_names):
+        host = host_of(u)
+        if not (is_body[u] and has_h[u]) or host < 0:
+            continue
+        mask = grid == u
+        expected = np.zeros((Nzs, Nx))
+        expected[mask] = host_factor(mask)
+        diff = (factor[u] * mask.sum(axis=0) - expected.sum(axis=0)) * dz  # extra thickness of the body (m)
+        host_mask = grid == host
+        host_total = (F * host_mask).sum(axis=0) * dz
+        cols = mask.any(axis=0) & (diff != 0)
+        scale = np.ones(Nx)
+        absorbed = cols & (host_total > 0)
+        scale[absorbed] = (host_total[absorbed] - diff[absorbed]) / host_total[absorbed]
+        n_short = np.sum(cols & ((host_total <= 0) | (scale < 0)))
+        if n_short:
+            print(f"Warning: in {n_short} column(s) '{unit_names[host]}' is too thin to absorb the thickness of "
+                  f"'{name}' (h); the units below are pushed down there.")
+        F[host_mask] *= np.broadcast_to(np.clip(scale, 0.0, None), (Nzs, Nx))[host_mask]
+
+    # new depth of the boundaries between samples, integrated from the top
+    depth_new = np.vstack([np.zeros((1, Nx)), np.cumsum(F * dz, axis=0)])
+    new_base = np.take_along_axis(depth_new, np.round(base / dz).astype(int), axis=0)
+    new_base[0] = Lz
+
+    if new_base[1].max() > Lz:
+        ix = int(np.argmax(new_base[1]))
+        sys.exit(f"The layers above the bottom unit are {new_base[1, ix] / 1e3:.1f} km thick at column {ix}, "
+                 f"more than Lz = {Lz / 1e3:.1f} km. Reduce h of some units.")
+    return new_base, report
+
+
 def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, verbose=True):
     '''
     Read the SVG and return the list of MandyocLayer (bottom to top) with their
     interfaces (base depth, m) set. Lx, Lz and dz in m.
+    The region mapped to the domain is the shape labelled "domain" if there is one,
+    the element domain_id if given, or else the page.
+
+    Parameters
+    ----------
+    svg_file : str
+        Path to the SVG file.
+    Lx : float
+        Horizontal length of the domain in meters.
+    Lz : float
+        Vertical length of the domain in meters.
+    Nx : int
+        Number of horizontal grid points.
+    dz : float, optional
+        Vertical grid spacing in meters. Default is 100.0.
+    domain_id : str, optional
+        ID of the SVG element to use as the domain. If None, the shape labelled "domain" is used if present, otherwise the entire page is used. Default is None.
+    verbose : bool, optional
+        If True, print information about the layers and scaling. Default is True.
     '''
+    if domain_id is None:
+        domain = read_domain(svg_file)
+        if domain is not None:
+            domain_id = domain["id"]
     shape_unit, units = read_units(svg_file)
     if not units:
         sys.exit("No shape with description found in the SVG.")
     unit_names = list(units)
 
-    x, zdepth, dz, grid, colors = rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id)
+    x, zdepth, dz, grid, under, colors = rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id)
     stack, unique, base = build_stack(grid, dz, Lz, unit_names)
+
+    # consistency check: rebuild the unit field of the drawing from the interfaces (Mandyoc convention)
+    rebuilt = np.array(stack)[(zdepth[:, None, None] < base[None, 1:, :].transpose(0, 2, 1)).sum(axis=2)]
+    mismatch = (rebuilt != grid).sum()
+
+    # scale the units with a reference thickness h
+    base, scaling = rescale_thickness(stack, base, grid, under, unit_names, units, Lz, dz)
 
     # one MandyocLayer per unit, copied for each slot of the stack
     unit_layers = []
@@ -371,6 +623,7 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, verbose=True
             setattr(layer, attr, value)
         layer.title = u["title"] or name
         layer.color = colors.get(i, "#808080")
+        layer.reference_thickness = u["thickness"]
         unit_layers.append(layer)
 
     layers = []
@@ -380,18 +633,16 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, verbose=True
         layer.base_depth = base[k].max()
         layers.append(layer)
 
-    # consistency check: rebuild the unit field from the interfaces (Mandyoc convention)
-    rebuilt = np.array(stack)[(zdepth[:, None, None] < base[None, 1:, :].transpose(0, 2, 1)).sum(axis=2)]
-    mismatch = (rebuilt != grid).sum()
-
     if verbose:
+        for line in scaling:
+            print(f"Thickness scaling: {line}")
         print(f"Distinct column patterns: {len(unique)}")
         print("Layers (bottom to top):")
         for k, layer in enumerate(layers):
             print(f"  {k:2d}  {layer.layer_label:25s} {layer.rheology_name:12s} "
                   f"C={layer.effective_viscosity_scale_factor:g} rho={layer.density:g} H={layer.radiogenic_heat_production:.4g}")
         print(f"n_interfaces = {len(layers) - 1}   # put this in param.txt")
-        print(f"Sampling: dx = {x[1] - x[0]:.1f} m, dz = {dz:.1f} m; mismatched samples after rebuild: {mismatch}")
+        print(f"Sampling: dx = {x[1] - x[0]:.1f} m, dz = {dz:.1f} m; mismatched samples of the drawing after rebuild: {mismatch}")
 
     return layers
 
@@ -445,17 +696,30 @@ def plot_layers(layers, Lx, Lz, fname):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("svg", help="SVG file with the scenario")
-    parser.add_argument("--Lx", type=float, default=1600.0, help="domain width [km] (default 1600)")
-    parser.add_argument("--Lz", type=float, default=300.0, help="domain depth [km] (default 300)")
-    parser.add_argument("--Nx", type=int, default=1601, help="number of points in x (default 1601)")
-    parser.add_argument("--dz", type=float, default=0.1, help="vertical sampling to locate the interfaces [km] (default 0.1)")
-    parser.add_argument("--domain-id", help="id of an element whose bounding box is the domain (default: the page)")
+    parser.add_argument("--Lx", type=float, help="domain width [km] (default: from the domain shape)")
+    parser.add_argument("--Lz", type=float, help="domain depth [km] (default: from the domain shape)")
+    parser.add_argument("--dx", type=float, help="horizontal resolution [km] (default: from the domain shape)")
+    parser.add_argument("--Nx", type=int, help="number of points in x (alternative to --dx)")
+    parser.add_argument("--sampling", type=float, default=0.1, help="vertical sampling to locate the interfaces [km] (default 0.1)")
+    parser.add_argument("--domain-id", help="id of an element whose bounding box is the domain (default: the shape labelled 'domain', or the page)")
     parser.add_argument("-o", "--output", default="interfaces.txt")
     parser.add_argument("--plot", help="save a figure of the resulting layers (e.g. numerical_setup.png)")
     args = parser.parse_args()
 
-    Lx, Lz = args.Lx * 1.0e3, args.Lz * 1.0e3
-    layers = layers_from_svg(args.svg, Lx, Lz, args.Nx, dz=args.dz * 1.0e3, domain_id=args.domain_id)
+    domain = read_domain(args.svg) or {}
+    Lx = args.Lx * 1.0e3 if args.Lx else domain.get("Lx")
+    Lz = args.Lz * 1.0e3 if args.Lz else domain.get("Lz")
+    if Lx is None or Lz is None:
+        sys.exit(f"No shape labelled '{DOMAIN_LABEL}' in the SVG: give --Lx and --Lz (and --dx or --Nx).")
+    if args.dx:
+        Nx = points_from_spacing(Lx, args.dx * 1.0e3, "dx")
+    else:
+        Nx = args.Nx or domain.get("Nx")
+    if Nx is None:
+        sys.exit("Give the horizontal resolution with --dx or --Nx.")
+    print(f"Domain: Lx = {Lx / 1e3:g} km, Lz = {Lz / 1e3:g} km, Nx = {Nx}")
+
+    layers = layers_from_svg(args.svg, Lx, Lz, Nx, dz=args.sampling * 1.0e3, domain_id=args.domain_id)
     write_interfaces(layers, args.output)
     print(f"Wrote {args.output}")
 
