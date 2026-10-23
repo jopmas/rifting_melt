@@ -331,17 +331,21 @@ litho_km = np.round(thickness_litho / 1.0e3, 1)
 has_seed = np.zeros(Nx, dtype=bool)
 for i in layer_indices(layers, seed_label):
     has_seed |= slot_thickness(layers, i, slice(None)) > 0
-litho_key = np.where(has_seed, -1.0, litho_km)
-edges = np.r_[0, np.nonzero(np.diff(litho_key))[0] + 1, Nx]
-regions = {} #lithosphere thickness: (first column, last column + 1)
+#unit at the base of the lithosphere in each column (e.g. a mobile belt inside a cratonic keel is a domain of its own)
+base_unit = np.array([next((layers[i].layer_label for i in range(idx_ast + 1, len(layers)) if slot_thickness(layers, i, ix) > 0), '')
+                      for ix in range(Nx)])
+litho_key = np.array([f"{litho_km[ix]}|{base_unit[ix]}" if(not has_seed[ix]) else '' for ix in range(Nx)])
+edges = np.r_[0, np.nonzero(litho_key[1:] != litho_key[:-1])[0] + 1, Nx]
+regions = {} #(lithosphere thickness, unit at its base): (first column, last column + 1)
 for begin, end in zip(edges[:-1], edges[1:]):
-    if(litho_key[begin] >= 0 and (end - begin) * Lx / (Nx - 1) >= min_profile_width):
-        if((litho_km[begin] not in regions) or (end - begin > np.diff(regions[litho_km[begin]])[0])):
-            regions[litho_km[begin]] = (begin, end)
+    key = (litho_km[begin], base_unit[begin])
+    if(litho_key[begin] != '' and (end - begin) * Lx / (Nx - 1) >= min_profile_width):
+        if((key not in regions) or (end - begin > np.diff(regions[key])[0])):
+            regions[key] = (begin, end)
 
 profiles = [] #(column, label, color)
 colors = profile_colors[-len(regions):] if(len(regions) <= len(profile_colors)) else profile_colors
-for k, (thickness, (begin, end)) in enumerate(sorted(regions.items())):
+for k, ((thickness, unit), (begin, end)) in enumerate(sorted(regions.items())):
     ix = (begin + end - 1) // 2
     i_mantle = next((i for i in range(idx_ast + 1, len(layers)) if slot_thickness(layers, i, ix) > 0), idx_ast + 1)
     name = layers[i_mantle].title.replace(' lith. mantle', '').replace(' lithospheric mantle', '')

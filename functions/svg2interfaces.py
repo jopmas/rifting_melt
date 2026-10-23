@@ -49,6 +49,14 @@ description gives the dimensions and the resolution of the Mandyoc grid:
                      dx = 2 km        (or Nx = 801)
                      dz = 2 km        (or Nz = 201)
 
+It may also give the settings of the numerical experiment, which are returned
+as text in domain["experiment"] and read by the generate_input_files*_svg.py
+scripts: regime (rifting, compression, accordion, quiescence), velocity
+(e.g. 1 cm/yr), moving_boundary (left or right), time_max (e.g. 100 Myr),
+quiescence_time (e.g. 300 Myr), magmatism (on or off), magmatism_extraction (on or off)
+magmatism_Ts0 (e.g. 1080, in oC) and preset_initial_temperature (folder or .nc file of a
+preliminary scenario whose final thermal state is used as initial temperature).
+
 Without a domain shape the SVG page is the domain and Lx, Lz, Nx must be given.
 x and z are scaled independently, so the drawing may be vertically
 exaggerated. Shapes are painted in document order (later shapes cover earlier
@@ -95,6 +103,8 @@ SVG_NS = "{http://www.w3.org/2000/svg}"
 INKSCAPE_LABEL = "{http://www.inkscape.org/namespaces/inkscape}label"
 SHAPE_TAGS = {"rect", "path", "circle", "ellipse", "polygon", "polyline"}
 DOMAIN_LABEL = "domain"  # label (or id) of the shape that gives the model domain
+EXPERIMENT_KEYS = ("regime", "velocity", "moving_boundary", "time_max", "quiescence_time",
+                   "magmatism", "magmatism_extraction", "magmatism_Ts0", "preset_initial_temperature")  # settings of the experiment in the domain description
 
 # key in the description -> attribute of MandyocLayer
 PROPERTY_KEYS = {
@@ -166,7 +176,8 @@ def points_from_spacing(length, spacing, name):
 def read_domain(svg_file):
     '''
     Read the shape labelled "domain" (see the module docstring).
-    Return dict(id, Lx, Lz, Nx, Nz) with lengths in m, or None if the SVG has no domain shape.
+    Return dict(id, Lx, Lz, Nx, Nz, experiment) with lengths in m, or None if the SVG has no domain shape.
+    experiment is a dict with the settings of the numerical experiment given in the description (as text).
     '''
     root = ET.parse(svg_file).getroot()
     shapes = [el for el in root.iter() if el.tag.replace(SVG_NS, "") in SHAPE_TAGS
@@ -183,7 +194,7 @@ def read_domain(svg_file):
     if desc is None or not (desc.text or "").strip():
         sys.exit(f"{where}: write Lx, Lz and the resolution (dx and dz, or Nx and Nz) in its description.")
 
-    values = {}
+    values, experiment = {}, {}
     for line in desc.text.splitlines():
         line = line.split("#")[0].strip()
         if not line:
@@ -198,13 +209,15 @@ def read_domain(svg_file):
                 values[key] = int(value)
             except ValueError:
                 sys.exit(f"{where}: {key} must be an integer.")
+        elif key in EXPERIMENT_KEYS:
+            experiment[key] = value
         else:
-            sys.exit(f"{where}: unknown key '{key}'. Use Lx, Lz, dx, dz (or Nx, Nz).")
+            sys.exit(f"{where}: unknown key '{key}'. Use Lx, Lz, dx, dz (or Nx, Nz) and {', '.join(EXPERIMENT_KEYS)}.")
 
     for key in ("Lx", "Lz"):
         if key not in values:
             sys.exit(f"{where}: missing {key} in the description.")
-    domain = dict(id=el.get("id"), Lx=values["Lx"], Lz=values["Lz"])
+    domain = dict(id=el.get("id"), Lx=values["Lx"], Lz=values["Lz"], experiment=experiment)
     for d, N, L in (("dx", "Nx", "Lx"), ("dz", "Nz", "Lz")):
         if d in values:
             domain[N] = points_from_spacing(values[L], values[d], d)
