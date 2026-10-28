@@ -51,8 +51,7 @@ function read_litho_file(fpath::String)
                     comment="P", 
                     delim=' ', 
                     types=[Int32, Int32, Int8], # x, z, lith_id
-                    # silencewarnings=true,
-                    on_error=:collect)
+                    silencewarnings=true)
                     
     return Vector(conf.Column1), Vector(conf.Column2), Vector(conf.Column3)
 end
