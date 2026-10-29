@@ -441,11 +441,13 @@ def read_mandyoc_output(model_path, parameters_file=PARAMETERS_FNAME, datasets=t
     return datasets_aux
 
 def read_datasets(model_path, datasets, save_big_dataset=False):
+    from functions.mandyoc_nc import open_mandyoc, find_file # reads tapioca and old .nc files
+
     empty_dataset = True
     for item in datasets:
         # dataset_aux = xr.open_dataset(f"{model_path}/_output_{item}.nc")
-        print(f"{model_path}/_{item}.nc")
-        dataset_aux = xr.open_dataset(f"{model_path}/_{item}.nc")
+        print(find_file(model_path, item))
+        dataset_aux = open_mandyoc(model_path, item)
         if (empty_dataset == True):
             dataset = dataset_aux
             empty_dataset = False

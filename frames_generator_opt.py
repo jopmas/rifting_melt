@@ -34,6 +34,7 @@ sys.path.append(os.path.abspath(path_to_functions))
 if '' in sys.path:
     sys.path.remove('')
 from functions.mandyocIO import read_datasets, change_dataset, plot_property
+from functions.mandyoc_nc import open_mandyoc, mask_air, legacy_lithology_codes
 
 ####################################################################################################################################
 model_path = os.getcwd() # Get local file
@@ -94,38 +95,27 @@ properties = [#Properties from mandyoc. Comment/uncomment to select which ones y
 strain_ds = None
 temperature_ds = None
 lithology_ds = None
+density_ds = None
 melt_ds = None
 dphi_ds = None
 
+# open_mandyoc reads tapioca (strain.nc, ...) and old (_strain.nc, ...) files with the same structure
 def init_worker(model_path, plot_melt):
 
-    global strain_ds, temperature_ds, lithology_ds
+    global strain_ds, temperature_ds, lithology_ds, density_ds
     global melt_ds, dphi_ds
 
-    strain_ds = xr.open_dataset(
-        f"{model_path}/_strain.nc",
-        cache=False
-    )
+    strain_ds = open_mandyoc(model_path, "strain", cache=False)
 
-    temperature_ds = xr.open_dataset(
-        f"{model_path}/_temperature.nc",
-        cache=False
-    )
+    temperature_ds = open_mandyoc(model_path, "temperature", cache=False)
 
-    lithology_ds = xr.open_dataset(
-        f"{model_path}/_lithology.nc",
-        cache=False
-    )
+    lithology_ds = open_mandyoc(model_path, "lithology", cache=False)
+
+    density_ds = open_mandyoc(model_path, "density", cache=False) # to set the air to zero as in the old files
     if plot_melt:
-            melt_ds = xr.open_dataset(
-                f"{model_path}/_melt.nc",
-                cache=False
-            )
+            melt_ds = open_mandyoc(model_path, "Phi", cache=False)
 
-            dphi_ds = xr.open_dataset(
-                f"{model_path}/_incremental_melt.nc",
-                cache=False
-            )
+            dphi_ds = open_mandyoc(model_path, "dPhi", cache=False)
 
 # def plot_frame(i):
 
@@ -134,6 +124,7 @@ def plot_chunks(indexs):
     global strain_ds
     global temperature_ds
     global lithology_ds
+    global density_ds
     global melt_ds
     global dphi_ds
 
@@ -148,7 +139,7 @@ def plot_chunks(indexs):
     z = np.linspace(-Lz/1000.0, 0, Nz)
     xx, zz  = np.meshgrid(x, z)
 
-    steps = np.array(strain_ds.steps.values)
+    steps = np.array(strain_ds.step.values)
     times = np.array(strain_ds.time.values)
 
     linewidth = 0.1
@@ -190,8 +181,9 @@ def plot_chunks(indexs):
 
     cmap = ListedColormap(colors)
     for i in indexs:
-        lithology = lithology_ds["lithology"].isel(time=i).values[::-1, :]
-        strain = strain_ds["strain"].isel(time=i).values[::-1, :]
+        density = density_ds["density"].isel(time=i)
+        lithology = legacy_lithology_codes(lithology_ds["lithology"].isel(time=i)).values[::-1, :]
+        strain = mask_air(strain_ds["strain"].isel(time=i), density).values[::-1, :]
         temperature = temperature_ds["temperature"].isel(time=i).values
 
         fig, axs = plt.subplots(1, 1, figsize=(12, 4), constrained_layout=True)
@@ -252,8 +244,8 @@ def plot_chunks(indexs):
         axs.tick_params(axis='both', labelsize=fsize)
 
         if(plot_melt):
-            incremental_melt = xr.open_dataset('_incremental_melt.nc', cache=False, engine="h5netcdf")['dPhi'].isel(time=i).values[::,:] #dPhi_dataset.isel(time=i).to_numpy()[::,:]
-            melt = xr.open_dataset('_melt.nc', cache=False, engine="h5netcdf")['Phi'].isel(time=i).values[::,:] #Phi_dataset.isel(time=i).to_numpy()[::,:]
+            incremental_melt = mask_air(dphi_ds['dPhi'].isel(time=i), density).values[::,:] #dPhi_dataset.isel(time=i).to_numpy()[::,:]
+            melt = mask_air(melt_ds['Phi'].isel(time=i), density).values[::,:] #Phi_dataset.isel(time=i).to_numpy()[::,:]
 
             #Plotting incremental melt
             color_incremental_melt = 'xkcd:bright pink'
@@ -291,7 +283,7 @@ plot_colorbar = True
 h_air = 40.0
 
 start = 0
-end = int(xr.open_dataset(f"{model_path}/_strain.nc").time.size)
+end = int(open_mandyoc(model_path, "strain").time.size)
 step = 1
 
 frames = range(start, end-step)

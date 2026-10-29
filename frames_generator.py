@@ -33,6 +33,7 @@ sys.path.append(os.path.abspath(path_to_functions))
 if '' in sys.path:
     sys.path.remove('')
 from functions.mandyocIO import read_datasets, change_dataset, plot_property
+from functions.mandyoc_nc import open_mandyoc, mesh_info, mask_air, legacy_lithology_codes
 
 ####################################################################################################################################
 model_path = os.getcwd() # Get local file
@@ -153,10 +154,7 @@ for item in to_remove:
 # Get domain and particles informations #
 #########################################
 
-Nx = int(xr.open_dataset(f"{model_path}/_strain.nc").nx) #int(strain_dataset.nx)
-Nz = int(xr.open_dataset(f"{model_path}/_strain.nc").nz) #int(strain_dataset.nz)
-Lx = float(xr.open_dataset(f"{model_path}/_strain.nc").lx) #float(strain_dataset.lx)
-Lz = float(xr.open_dataset(f"{model_path}/_strain.nc").lz) #float(strain_dataset.lz)
+Nx, Nz, Lx, Lz = mesh_info(model_path) # works with tapioca and old .nc files
 
 x = np.linspace(0, Lx/1000.0, Nx)
 z = np.linspace(-Lz/1000.0, 0, Nz)
@@ -169,7 +167,7 @@ plot_colorbar = True
 h_air = 40.0
 
 start = 0
-end = int(xr.open_dataset(f"{model_path}/_strain.nc").time.size)
+end = int(open_mandyoc(model_path, "strain").time.size)
 step = 1
 
 make_videos = True
@@ -220,15 +218,18 @@ colors = [color_ast,
 cmap = ListedColormap(colors)
 np.seterr(divide='ignore')
 # time = time[::-1]
-steps = np.array(xr.open_dataset(f"_strain.nc").steps.values)
-times = np.array(xr.open_dataset(f"_strain.nc").time.values)
+steps = np.array(open_mandyoc(model_path, "strain").step.values)
+times = np.array(open_mandyoc(model_path, "strain").time.values)
 print(f'nx, nz, times: {Nx}, {Nz}, {len(times)}, type')
 fig_format = 'jpeg'
 
+# Files from tapioca keep the raw values in the air and the Mandyoc lithology codes.
+# mask_air and legacy_lithology_codes reproduce the old _*.nc files (and do nothing on them).
 def worker(i):
-    lithology = xr.open_dataset("_lithology.nc", cache=False, engine="h5netcdf")["lithology"].isel(time=i).values[::-1,:]
-    strain  = xr.open_dataset("_strain.nc", cache=False, engine="h5netcdf")["strain"].isel(time=i).values[::-1,:]
-    temperature = xr.open_dataset("_temperature.nc", cache=False, engine="h5netcdf")["temperature"].isel(time=i).values
+    lithology = legacy_lithology_codes(open_mandyoc(model_path, "lithology", cache=False, engine="h5netcdf")["lithology"].isel(time=i)).values[::-1,:]
+    density = open_mandyoc(model_path, "density", cache=False, engine="h5netcdf")["density"].isel(time=i)
+    strain  = mask_air(open_mandyoc(model_path, "strain", cache=False, engine="h5netcdf")["strain"].isel(time=i), density).values[::-1,:]
+    temperature = open_mandyoc(model_path, "temperature", cache=False, engine="h5netcdf")["temperature"].isel(time=i).values
     return lithology, strain, temperature
 
 A = np.zeros((100, 10))
@@ -250,12 +251,13 @@ chunk_size = 4
 with pymp.Parallel() as p:
     # for i in p.range(start, end-step, step):
     for chunk_start in p.range(start, end, chunk_size):
-        lithology = xr.open_dataset("_lithology.nc", cache=False, engine="h5netcdf")["lithology"]
-        strain = xr.open_dataset("_strain.nc", cache=False, engine="h5netcdf")["strain"]
-        temperature = xr.open_dataset("_temperature.nc", cache=False, engine="h5netcdf")["temperature"]
+        lithology = open_mandyoc(model_path, "lithology", cache=False, engine="h5netcdf")["lithology"]
+        strain = open_mandyoc(model_path, "strain", cache=False, engine="h5netcdf")["strain"]
+        temperature = open_mandyoc(model_path, "temperature", cache=False, engine="h5netcdf")["temperature"]
+        density = open_mandyoc(model_path, "density", cache=False, engine="h5netcdf")["density"]
         if(plot_melt):
-            incremental_melt = xr.open_dataset("_incremental_melt.nc", cache=False, engine="h5netcdf")["dPhi"]
-            melt = xr.open_dataset("_melt.nc", cache=False, engine="h5netcdf")["Phi"]
+            incremental_melt = open_mandyoc(model_path, "dPhi", cache=False, engine="h5netcdf")["dPhi"]
+            melt = open_mandyoc(model_path, "Phi", cache=False, engine="h5netcdf")["Phi"]
 
         for i in range(chunk_start, min(chunk_start + chunk_size, end)):
             steps_model = steps[i] #dataset.steps.values[i]
@@ -272,13 +274,13 @@ with pymp.Parallel() as p:
             axs.text(0.01, 1.035, f'{model_name}', bbox=dict(facecolor='white', edgecolor='white', alpha=0.0), fontsize = 14, zorder=52, transform=axs.transAxes)
             axs.text(0.5, 1.035, f'Time = {current_time:.2f} Myr', bbox=dict(facecolor='white', edgecolor='white', alpha=0.0), fontsize = 14, zorder=52, transform=axs.transAxes)
             
-            axs.imshow(lithology.isel(time=i).values[::-1, :], aspect='auto', extent=(0, Lx/1000, -Lz/1000+40, 40), cmap=cmap, vmin=0, vmax=6, alpha=1.0)  
+            axs.imshow(legacy_lithology_codes(lithology.isel(time=i)).values[::-1, :], aspect='auto', extent=(0, Lx/1000, -Lz/1000+40, 40), cmap=cmap, vmin=0, vmax=6, alpha=1.0)
 
             # strain  = strain_dataset.strain.values[i][::-1,:]
             # temperature = temperature_dataset.temperature.values[i][::-1,:]   
 
             # axs.imshow(np.log10(strain), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2)
-            axs.imshow(np.log10(strain.isel(time=i).values[::-1, :]), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2, aspect='auto')
+            axs.imshow(np.log10(mask_air(strain.isel(time=i), density.isel(time=i)).values[::-1, :]), extent=(0, Lx/1000, -Lz/1000+40, 40), cmap="Greys", vmin=-0.5, vmax=0.9, alpha=0.2, aspect='auto')
             axs.contour(x, z+40, temperature.isel(time=i).values, levels=[500, 600, 700, 800, 900, 1300], colors='r', linewidths=1.0)
             axs.set_ylim(ylims)
             axs.set_xlim(xlims)
@@ -337,8 +339,8 @@ with pymp.Parallel() as p:
             if(plot_melt):
                 # incremental_melt = xr.open_dataset('_incremental_melt.nc', cache=False, engine="h5netcdf")['dPhi'].isel(time=i).values[::,:] #dPhi_dataset.isel(time=i).to_numpy()[::,:]
                 # melt = xr.open_dataset('_melt.nc', cache=False, engine="h5netcdf")['Phi'].isel(time=i).values[::,:] #Phi_dataset.isel(time=i).to_numpy()[::,:]
-                incremental_melt_i = incremental_melt.isel(time=i).values[::,:]
-                melt_i = melt.isel(time=i).values[::,:]
+                incremental_melt_i = mask_air(incremental_melt.isel(time=i), density.isel(time=i)).values[::,:]
+                melt_i = mask_air(melt.isel(time=i), density.isel(time=i)).values[::,:]
                 #Plotting incremental melt
                 color_incremental_melt = 'xkcd:bright pink'
                 color_depleted_mantle='xkcd:purple'
@@ -375,6 +377,7 @@ with pymp.Parallel() as p:
         del lithology
         del strain
         del temperature
+        del density
         if(plot_melt):
             del incremental_melt
             del melt

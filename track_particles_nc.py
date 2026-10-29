@@ -1,11 +1,12 @@
 ########################################################################
 # BEFORE RUNNING THIS SCRIPT:                                          #
 #  - CREATE THE .nc FILES FROM .txt MANDYOC OUTPUTS                    #
-#  - CREATE THE _steps.nc FILE WITH StepsNETCDF.jl                     #
+#  - CREATE THE PARTICLES .nc FILE WITH tapioca's particles2netcdf.jl  #
+#    (particles_trajectories.nc) OR WITH StepsNETCDF.jl (_steps.nc)    #
 #  - RUN THIS SCRIPT IN THE SAME FOLDER WHERE THE .nc FILES ARE        #
 #                                                                      #
-# Same as track_particles.py, but reads the particles from _steps.nc   #
-# instead of the steps/step*.txt files                                 #
+# Same as track_particles.py, but reads the particles from the .nc     #
+# file instead of the steps/step*.txt files                            #
 ########################################################################
 
 import numpy as np
@@ -15,14 +16,21 @@ import subprocess
 import multiprocessing #needed to run pymp in macOS
 multiprocessing.set_start_method('fork') #needed to run pymp in macOS arm architectures
 import pymp
+import sys
+
+path = os.getcwd().split('/')
+machine_path = f'/{path[1]}/{path[2]}' #cat the /home/user/ or /Users/user from system using path
+sys.path.append(os.path.abspath(f"{machine_path}/opt/rifting_melt"))
+sys.path.append(os.path.dirname(os.path.abspath(__file__))) # the repository folder, if the script is run from it
+from functions.mandyoc_nc import open_mandyoc, open_particles # reads tapioca and old .nc files with the same structure
 
 model_path = os.getcwd() # Get local file
 model_name = model_path.split('/')[-1]
 
 #reading datasets
-Tdataset = xr.open_dataset("_temperature.nc")
-Pdataset = xr.open_dataset("_pressure.nc")
-Sdataset = xr.open_dataset("_steps.nc")
+Tdataset = open_mandyoc(model_path, "temperature")
+Pdataset = open_mandyoc(model_path, "pressure")
+Sdataset = open_particles(model_path) # particles_trajectories.nc (tapioca) or _steps.nc (StepsNETCDF.jl)
 
 #getting the dimensions
 Nx = int(Tdataset.nx)
@@ -68,17 +76,17 @@ if(Tdataset.time.values[-1] < instant_to_take):
     print(f"WARNING: the model only reaches {Tdataset.time.values[-1]:.2f} Myr (< {instant_to_take} Myr). The last step will be used.")
 
 idx = (np.abs(Tdataset.time.values - instant_to_take)).argmin()
-step_final = Tdataset.steps.values[idx]
+step_final = Tdataset.step.values[idx]
 
 print(f"Track particles until {instant_to_take} Myr, idx: {idx}, time idx: {Tdataset.time.values[idx]} Myr")
 
 print("Final step: ", step_final)
 
 #index of each step of Tdataset inside _steps.nc
-steps_nc = Sdataset.steps.values
-missing_steps = np.setdiff1d(Tdataset.steps.values[:idx+1], steps_nc)
+steps_nc = Sdataset.step.values
+missing_steps = np.setdiff1d(Tdataset.step.values[:idx+1], steps_nc)
 if(missing_steps.size > 0):
-    raise ValueError(f"Steps not found in _steps.nc: {missing_steps}")
+    raise ValueError(f"Steps not found in the particles file: {missing_steps}")
 
 def steps_nc_index(step):
     return int(np.where(steps_nc == step)[0][0])
@@ -147,7 +155,7 @@ start = 0
 end = idx
 print(f'Start idx: {start}, End idx: {end}, time of end: {Tdataset.time.values[end]}')
 
-nc_idx = [steps_nc_index(s) for s in Tdataset.steps.values[start:end+1]]
+nc_idx = [steps_nc_index(s) for s in Tdataset.step.values[start:end+1]]
 #Reading the whole (time, particle) block and indexing with numpy is much faster than .sel(particle=...) on the file
 part_idx = np.searchsorted(Sdataset.particle.values, part_selec)
 xtrack = Sdataset.x.values[nc_idx][:, part_idx] #(time, particle)
@@ -155,7 +163,7 @@ ztrack = Sdataset.z.values[nc_idx][:, part_idx]
 
 n_missing = np.count_nonzero(~np.isfinite(xtrack))
 if(n_missing > 0):
-    print(f"WARNING: {n_missing} (time, particle) positions do not exist in _steps.nc. P and T will be NaN there.")
+    print(f"WARNING: {n_missing} (time, particle) positions do not exist in the particles file. P and T will be NaN there.")
 
 #We need shared pymp arrays to store data.
 ptrack = pymp.shared.array(xtrack.shape, dtype=np.float64)
@@ -193,10 +201,10 @@ with pymp.Parallel() as p:
         ptrack[it, ok] = present_pressure / 1.0e6
         ttrack[it, ok] = present_temperature
 
-        np.savetxt(f"track_xzPT_step_{str(Tdataset.steps.values[i]).zfill(6)}.txt", np.c_[vecx_track, vecz_track, ptrack[it], ttrack[it]], fmt="%.5f")
+        np.savetxt(f"track_xzPT_step_{str(Tdataset.step.values[i]).zfill(6)}.txt", np.c_[vecx_track, vecz_track, ptrack[it], ttrack[it]], fmt="%.5f")
 
 all_time = Tdataset.time.values[start:end+1]
-all_step = Tdataset.steps.values[start:end+1]
+all_step = Tdataset.step.values[start:end+1]
 
 #Flattening (time, particle) as in track_particles.py: time ascending, then reversed
 all_vecx_track = xtrack.ravel()
